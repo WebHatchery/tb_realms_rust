@@ -1,0 +1,10 @@
+{
+  "packs": [
+    {
+      "source": "assets",
+      "output": "assets.zip",
+      "entry_root": "assets",
+      "delete_source": true
+    }
+  ]
+}

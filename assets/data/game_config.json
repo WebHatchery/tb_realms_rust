@@ -1,0 +1,12 @@
+{
+  "game_name": "tb_realms",
+  "display_name": "Tradeborn Realms",
+  "save_slot": "autosave",
+  "version": "1.0.0",
+  "starting_points": 25,
+  "starting_energy": 60.0,
+  "max_energy": 100.0,
+  "energy_per_second": 4.0,
+  "world_width": 14,
+  "world_height": 9
+}

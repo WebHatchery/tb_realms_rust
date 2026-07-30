@@ -1,0 +1,26 @@
+{
+  "title": "Tradeborn Realms",
+  "wasm": "tb_realms",
+  "roost_slug": "rust_tb_realms",
+  "status": { "text": "In Development", "class": "in-development" },
+  "canvas_rendering": "pixelated",
+  "about": [
+    "A fantasy securities market. You are a broker on the floor of the Tradeborn Exchange, buying and selling positions in noble houses, knightly orders, regions, trade routes, and the raw commodities of a living world.",
+    "The listings are not invented. Every instrument is backed by a real entity in the world of Mytherra — a house whose prestige rises and falls with the renown of its living heirs, a region whose granaries empty in a famine, a mine that a war closes. The chronicle is your newspaper; the fundamentals underneath it are your research.",
+    "You cannot touch the world. You can only read it faster and better than the next broker. Positions settle on the world's clock, not yours — and a century-long era ends in a cataclysm that has never once been priced in correctly."
+  ],
+  "controls": [
+    { "key": "Mouse", "desc": "Select listings, place orders, scrub charts" },
+    { "key": "1-5", "desc": "Jump to floor / listing / portfolio / chronicle / records" },
+    { "key": "B / S", "desc": "Buy / sell the selected listing" },
+    { "key": "Space", "desc": "Advance to the next settlement" },
+    { "key": "Esc", "desc": "Pause menu" }
+  ],
+  "details": [
+    { "label": "Genre", "value": "Trading / market simulation" },
+    { "label": "Engine", "value": "Macroquad + Toolkit" },
+    { "label": "Platform", "value": "Browser, Windows" },
+    { "label": "World", "value": "Reads the Mytherra simulation" },
+    { "label": "Ported from", "value": "game_apps/tb_realms (React + PHP)" }
+  ]
+}

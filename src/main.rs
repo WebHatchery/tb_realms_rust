@@ -5,6 +5,7 @@ use macroquad_toolkit::capture;
 
 mod data;
 mod game;
+mod market;
 mod state;
 mod ui;
 mod world;

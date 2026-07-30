@@ -10,7 +10,7 @@
 
 use super::*;
 use mytherra_core::data::{GameData, ResourceStatus};
-use mytherra_core::world::{RegionStatus, WorldState};
+use mytherra_core::world::{House, Order, RegionStatus, WorldState};
 use mytherra_protocol::{project_world, spectator_standing};
 
 /// A freshly seeded world as a spectator receives it.
@@ -60,6 +60,7 @@ fn the_seeded_world_supplies_every_instrument_class_we_diff() {
     assert!(!view.settlements.is_empty(), "settlement shares");
     assert!(!view.trade_routes.is_empty(), "route tolls");
     assert!(!view.resource_nodes.is_empty(), "commodities");
+    assert!(!view.artifacts.is_empty(), "relic lots");
     assert!(
         !view.heroes.is_empty(),
         "houses and orders derive from heroes"
@@ -296,7 +297,65 @@ fn a_resource_node_status_change_is_a_supply_shock() {
     );
     let entity = EntityRef::ResourceNode(node_id);
     assert_eq!(move_for(&delta, Field::NodeStatus).entity, entity);
-    assert_eq!(entity.class(), "commodity");
+    // The node feeds a commodity but is never itself a listing — you trade
+    // grain, not a named field.
+    assert!(entity.listing_class().is_none());
+    let kind = before.resource_nodes[0].resource_type.label();
+    assert_eq!(
+        EntityRef::Commodity(kind.to_owned()).listing_class(),
+        Some("commodity")
+    );
+}
+
+#[test]
+fn the_last_node_of_a_kind_going_delists_its_commodity() {
+    let before = base();
+    let kind = before.resource_nodes[0].resource_type;
+    let label = kind.label();
+    let mut after = next(&before);
+    // Every node of one kind is lost — the commodity has nothing left behind it.
+    after.resource_nodes.retain(|n| n.resource_type != kind);
+
+    let delta = diff(&before, &after);
+
+    assert!(
+        delta
+            .delisted
+            .contains(&EntityRef::Commodity(label.to_owned())),
+        "a commodity with no nodes left stops being a listing: {:?}",
+        delta.delisted
+    );
+}
+
+#[test]
+fn a_worked_out_mine_shows_up_as_supply_leaving_the_commodity() {
+    let before = base();
+    let kind = before.resource_nodes[0].resource_type;
+    let mut after = next(&before);
+    // One node of the kind is worked out. The commodity keeps its node count and
+    // loses one producer — which is the number a supply shock is priced against.
+    let already_dead = before.resource_nodes[0].status == ResourceStatus::Depleted;
+    after.resource_nodes[0].status = ResourceStatus::Depleted;
+
+    let delta = diff(&before, &after);
+    let commodity = EntityRef::Commodity(kind.label().to_owned());
+    let producing = delta
+        .moves
+        .iter()
+        .find(|m| m.entity == commodity && m.field == Field::NodesProducing);
+
+    if already_dead {
+        assert!(producing.is_none(), "nothing changed, so nothing moved");
+    } else {
+        assert_eq!(producing.expect("supply moved").change.magnitude(), -1.0);
+        assert!(
+            !delta
+                .moves
+                .iter()
+                .any(|m| m.entity == commodity && m.field == Field::NodeCount),
+            "the node still exists; only its yield is gone"
+        );
+    }
 }
 
 #[test]
@@ -342,28 +401,16 @@ fn the_digest_leads_with_the_largest_moves() {
 }
 
 #[test]
-fn every_watched_field_has_a_distinct_data_key() {
-    // `impacts.json` keys on these strings (GDD 6), so a duplicate would make
-    // two different world fields indistinguishable to the balance table.
-    let fields = [
-        Field::Prestige,
-        Field::LivingMembers,
-        Field::LivingRenown,
-        Field::Prosperity,
-        Field::Chaos,
-        Field::Danger,
-        Field::MagicAffinity,
-        Field::Population,
-        Field::CulturalInfluence,
-        Field::DivineResonance,
-        Field::Strife,
-        Field::Harvest,
-        Field::Lore,
-        Field::Famine,
-        Field::RegionStatus,
-        Field::Volume,
-        Field::NodeStatus,
-    ];
-    let keys: std::collections::BTreeSet<&str> = fields.iter().map(|f| f.key()).collect();
-    assert_eq!(keys.len(), fields.len(), "two fields share a data key");
+fn every_watched_field_has_a_distinct_data_key_that_round_trips() {
+    // `instruments.json` and `impacts.json` key on these strings (GDD 6), so a
+    // duplicate would make two different world fields indistinguishable to the
+    // balance tables, and a key that cannot be parsed back would make a rule
+    // referencing it unreachable.
+    let keys: std::collections::BTreeSet<&str> =
+        Field::ALL.iter().map(|field| field.key()).collect();
+    assert_eq!(keys.len(), Field::ALL.len(), "two fields share a data key");
+    for field in Field::ALL {
+        assert_eq!(Field::from_key(field.key()), Some(field));
+    }
+    assert_eq!(Field::from_key("not_a_field"), None);
 }

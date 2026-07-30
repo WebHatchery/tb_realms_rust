@@ -1,14 +1,21 @@
-//! The exchange's own state: what it has watched the world do, and what of
-//! that survives a restart.
+//! The exchange's own state: what it has watched the world do, what it
+//! currently lists, and what of that survives a restart.
 //!
-//! There are no positions here yet — the market arrives in M2 (GDD 13). What
-//! exists now is the settlement log: one record per turning of the world, which
-//! is what the digest and records screens are built from, and the chronicle
-//! cursor, so a reopened exchange resumes reading where it stopped rather than
-//! re-reading a century of prose.
+//! There are no positions here yet — prices and orders arrive in M2 (GDD 13).
+//! What exists now is the [`Board`], derived wholly from the world, and the
+//! settlement log: one record per turning, which is what the digest and records
+//! screens are built from. The chronicle cursor rides along so a reopened
+//! exchange resumes reading where it stopped rather than re-reading a century of
+//! prose.
+//!
+//! The board is deliberately **not** saved. It is a function of the world, and
+//! the next read rebuilds it exactly; persisting it would only create a way for
+//! the exchange's idea of what exists to drift from the world's.
 
 use crate::data::GameConfig;
+use crate::market::{Board, BoardChange, InstrumentRules};
 use crate::world::delta::{Change, WorldDelta};
+use crate::world::Snapshot;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,9 +34,11 @@ pub struct SettlementRecord {
     pub moves: usize,
     pub listed: usize,
     pub delisted: usize,
-    /// A few of the instruments that appeared or vanished, named. This is the
-    /// content no authored market can produce — a house whose blood ran out, a
-    /// settlement razed — so the digest says which, not merely how many.
+    /// Listings whose fair value moved this turning.
+    pub revalued: usize,
+    /// A few of the instruments that appeared or vanished, by ticker. This is
+    /// the content no authored market can produce — a house whose blood ran
+    /// out, a settlement razed — so the digest says which, not merely how many.
     pub notable: Vec<String>,
     /// The fields that moved furthest, in the vocabulary the balance tables
     /// will use. The embryo of the price-move decomposition (GDD 5.4): a
@@ -55,19 +64,16 @@ fn describe(change: &Change) -> String {
 }
 
 impl SettlementRecord {
-    fn from_delta(delta: &WorldDelta) -> Self {
+    fn from_delta(delta: &WorldDelta, board: &BoardChange) -> Self {
         // Delistings lead: a position in something that no longer exists is the
-        // more urgent news than a new listing to consider.
-        let notable = delta
+        // more urgent news than a new listing to consider. These are the board's
+        // own tickers rather than the delta's raw entities, because a resource
+        // node appearing is supply news, not a security anyone can hold.
+        let notable = board
             .delisted
             .iter()
-            .map(|entity| format!("{} {} delisted", entity.class(), entity.id()))
-            .chain(
-                delta
-                    .listed
-                    .iter()
-                    .map(|entity| format!("{} {} listed", entity.class(), entity.id())),
-            )
+            .map(|symbol| format!("{symbol} delisted"))
+            .chain(board.listed.iter().map(|symbol| format!("{symbol} listed")))
             .take(NOTABLE_LIMIT)
             .collect();
 
@@ -96,8 +102,9 @@ impl SettlementRecord {
             tick: delta.to_tick,
             years: delta.years(),
             moves: delta.moves.len(),
-            listed: delta.listed.len(),
-            delisted: delta.delisted.len(),
+            listed: board.listed.len(),
+            delisted: board.delisted.len(),
+            revalued: board.revalued,
             notable,
             top_moves,
             headline: delta.events.last().map(|event| event.message.clone()),
@@ -121,6 +128,9 @@ pub struct SaveData {
 pub struct GameSession {
     /// Settlements observed, newest first.
     settlements: Vec<SettlementRecord>,
+    /// What the exchange currently lists — the world's own answer, not the
+    /// exchange's opinion.
+    board: Board,
     /// The world tick last seen, or zero before the first world arrives.
     pub last_tick: u64,
     /// Total settlements observed this session, which outlives the bounded log.
@@ -132,18 +142,31 @@ impl GameSession {
         Self::default()
     }
 
-    /// Record a turning of the world.
-    pub fn record(&mut self, delta: &WorldDelta) {
+    /// Bring the board in line with a fresh reading of the world.
+    ///
+    /// Separate from [`record`](Self::record) because the two answer different
+    /// questions: the board must hang the moment the world first answers, while
+    /// a settlement is only logged when the world actually turns.
+    pub fn list(&mut self, snapshot: &Snapshot, rules: &InstrumentRules) -> BoardChange {
+        self.board.refresh(snapshot, rules)
+    }
+
+    /// Record a turning of the world, and what it did to the board.
+    pub fn record(&mut self, delta: &WorldDelta, board: &BoardChange) {
         self.last_tick = delta.to_tick;
         self.observed += 1;
         self.settlements
-            .insert(0, SettlementRecord::from_delta(delta));
+            .insert(0, SettlementRecord::from_delta(delta, board));
         self.settlements.truncate(LOG_CAPACITY);
     }
 
     /// Settlements observed, newest first.
     pub fn settlements(&self) -> &[SettlementRecord] {
         &self.settlements
+    }
+
+    pub fn board(&self) -> &Board {
+        &self.board
     }
 
     pub fn to_save(&self, version: &str, cursor: u64) -> SaveData {
@@ -157,6 +180,10 @@ impl GameSession {
     pub fn from_save(save: &SaveData) -> Self {
         Self {
             settlements: Vec::new(),
+            // The board is a function of the world, so it is rebuilt from the
+            // next read rather than restored from a save that could disagree
+            // with what the world now carries.
+            board: Board::new(),
             last_tick: save.last_tick,
             observed: 0,
         }
@@ -205,7 +232,7 @@ mod tests {
     fn settlements_are_logged_newest_first_and_bounded() {
         let mut session = GameSession::new();
         for year in 1..=(LOG_CAPACITY as u32 + 10) {
-            session.record(&delta(year, year as u64));
+            session.record(&delta(year, year as u64), &BoardChange::default());
         }
 
         assert_eq!(
@@ -227,15 +254,59 @@ mod tests {
     #[test]
     fn a_save_round_trips_the_cursor_and_tick() {
         let mut session = GameSession::new();
-        session.record(&delta(341, 17));
+        session.record(&delta(341, 17), &BoardChange::default());
 
         let save = session.to_save("0.1.0", 4_212);
         let resumed = GameSession::from_save(&save);
 
         assert_eq!(resumed.last_tick, 17);
-        // The log itself is not persisted — it is a display buffer, and the
-        // world repopulates it on the next read.
+        // Neither the log nor the board is persisted — the log is a display
+        // buffer and the board is a function of the world, and the next read
+        // repopulates both.
         assert!(resumed.settlements().is_empty());
+        assert!(resumed.board().is_empty());
+    }
+
+    #[test]
+    fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
+        use crate::data::GameData;
+        use mytherra_protocol::{project_world, spectator_standing};
+
+        let rules = GameData::load().unwrap().instruments;
+        let content = mytherra_core::data::GameData::load().unwrap();
+        let view = project_world(
+            &mytherra_core::world::WorldState::new(&content),
+            &spectator_standing(),
+        );
+
+        let mut session = GameSession::new();
+        let opening = session.list(&Snapshot::read(&view), &rules);
+
+        assert!(!session.board().is_empty(), "the world hangs the board");
+        assert_eq!(opening.listed.len(), session.board().len());
+        assert!(opening.delisted.is_empty());
+
+        // A settlement's digest reports the board's own tickers, so a razed
+        // town reads as paper struck off rather than as an entity count.
+        let mut razed = view.clone();
+        let lost = razed.settlements.remove(0);
+        let change = session.list(&Snapshot::read(&razed), &rules);
+        session.record(&delta(razed.year + 1, 2), &change);
+
+        assert_eq!(change.delisted.len(), 1);
+        assert_eq!(session.settlements()[0].delisted, 1);
+        assert!(
+            session.settlements()[0].notable[0].ends_with("delisted"),
+            "{:?}",
+            session.settlements()[0].notable
+        );
+        assert!(
+            session
+                .board()
+                .listings()
+                .all(|listing| listing.name != lost.name),
+            "the razed town is off the board"
+        );
     }
 
     #[test]

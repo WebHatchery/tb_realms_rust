@@ -5,13 +5,14 @@
 //! world — a panel that wants something adds a variant here and the dispatcher
 //! in `game.rs` decides what it means.
 //!
-//! What it draws today is the seam made visible: the state of the wire, the
-//! world's own clock, how many of each instrument class the world is currently
-//! offering, and the settlements as they land. The floor, listings, charts and
-//! order tickets are M3; this is the board the exchange hangs before it has
-//! anything to trade.
+//! What it draws today is the board the world hangs: every listing the world
+//! currently backs, what the fundamentals say it is worth, and what it pays —
+//! beside the settlements as they land. There are no prices yet, so the board
+//! shows fair value, which is the number a price will spend the whole game
+//! failing to sit on. Charts, order tickets and the research browser are M3.
 
 use crate::data::GameData;
+use crate::market::Instrument;
 use crate::state::GameSession;
 use crate::world::SourceStatus;
 use macroquad::prelude::*;
@@ -39,54 +40,6 @@ pub struct UiContext<'a> {
     pub view: Option<&'a WorldView>,
     pub save_exists: bool,
     pub ui: &'a VirtualUi,
-}
-
-/// One instrument class and how many of its backing entities the world is
-/// currently carrying (GDD 5.2).
-struct ClassCount {
-    label: &'static str,
-    backing: &'static str,
-    count: usize,
-}
-
-fn class_counts(view: &WorldView) -> [ClassCount; 7] {
-    [
-        ClassCount {
-            label: "House scrip",
-            backing: "House",
-            count: view.houses.len(),
-        },
-        ClassCount {
-            label: "Order charters",
-            backing: "Order",
-            count: view.orders.len(),
-        },
-        ClassCount {
-            label: "Regional bonds",
-            backing: "Region",
-            count: view.regions.len(),
-        },
-        ClassCount {
-            label: "Settlement shares",
-            backing: "Settlement",
-            count: view.settlements.len(),
-        },
-        ClassCount {
-            label: "Route tolls",
-            backing: "TradeRoute",
-            count: view.trade_routes.len(),
-        },
-        ClassCount {
-            label: "Commodities",
-            backing: "ResourceNode",
-            count: view.resource_nodes.len(),
-        },
-        ClassCount {
-            label: "Relic lots",
-            backing: "Artifact",
-            count: view.artifacts.len(),
-        },
-    ]
 }
 
 pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
@@ -164,77 +117,87 @@ fn draw_header(ctx: &UiContext<'_>) {
     );
 }
 
+/// The dearest listings first, which is the order a board is read in.
+fn ranked_listings(session: &GameSession) -> Vec<&Instrument> {
+    let mut ranked: Vec<&Instrument> = session.board().listings().collect();
+    ranked.sort_by(|a, b| b.fair_value.total_cmp(&a.fair_value));
+    ranked
+}
+
 fn draw_listings_panel(ctx: &UiContext<'_>) {
     let rect = Rect::new(18.0, 104.0, 560.0, 452.0);
-    panel(rect, "What the world is offering");
+    panel(rect, "The board");
 
-    let Some(view) = ctx.view else {
+    if ctx.session.board().is_empty() {
         draw_ui_text_ex(
-            "no world in hand yet",
+            "no world in hand yet — nothing is listed",
             rect.x + 16.0,
             rect.y + 60.0,
             TextStyle::new(15.0, dark::TEXT_DIM).params(),
         );
         return;
-    };
-
-    let mut y = rect.y + 58.0;
-    let mut total = 0;
-    for class in class_counts(view) {
-        total += class.count;
-        // A class with no backing entity is not an error — houses and orders
-        // arise and dissolve as the world runs, and an empty one is a fact
-        // about the world rather than a fault in the exchange.
-        let tint = if class.count == 0 {
-            dark::TEXT_DIM
-        } else {
-            dark::TEXT
-        };
-        draw_ui_text_ex(
-            class.label,
-            rect.x + 16.0,
-            y,
-            TextStyle::new(16.0, tint).params(),
-        );
-        draw_ui_text_ex(
-            class.backing,
-            rect.x + 210.0,
-            y,
-            TextStyle::new(13.0, dark::TEXT_DIM).params(),
-        );
-        draw_ui_text_ex(
-            &class.count.to_string(),
-            rect.right() - 60.0,
-            y,
-            TextStyle::new(16.0, tint).params(),
-        );
-        y += 30.0;
     }
 
-    y += 12.0;
+    let ranked = ranked_listings(ctx.session);
+    let value_x = rect.right() - 148.0;
+    let yield_x = rect.right() - 74.0;
+    let mut y = rect.y + 52.0;
+    for (label, x) in [
+        ("SYM", rect.x + 16.0),
+        ("BACKED BY", rect.x + 76.0),
+        ("FAIR", value_x),
+        ("YIELD", yield_x),
+    ] {
+        draw_ui_text_ex(label, x, y, TextStyle::new(12.0, dark::TEXT_DIM).params());
+    }
+    y += 20.0;
+
+    let rows = ((rect.bottom() - 44.0 - y) / 24.0) as usize;
+    for listing in ranked.iter().take(rows) {
+        draw_ui_text_ex(
+            &listing.symbol,
+            rect.x + 16.0,
+            y,
+            TextStyle::new(15.0, dark::TEXT_BRIGHT).params(),
+        );
+        draw_ui_text_ex(
+            &truncate(&listing.name, 26),
+            rect.x + 76.0,
+            y,
+            TextStyle::new(14.0, dark::TEXT).params(),
+        );
+        draw_ui_text_ex(
+            &format!("{:.1}", listing.fair_value),
+            value_x,
+            y,
+            TextStyle::new(14.0, dark::TEXT).params(),
+        );
+        // A listing that pays nothing says so plainly rather than printing a
+        // zero that reads like a collapsed coupon.
+        let (paid, tint) = if listing.income > 0.0 {
+            (
+                format!("{:.1}%", listing.yield_rate() * 100.0),
+                Color::new(0.55, 0.78, 0.60, 1.0),
+            )
+        } else {
+            ("—".to_owned(), dark::TEXT_DIM)
+        };
+        draw_ui_text_ex(&paid, yield_x, y, TextStyle::new(14.0, tint).params());
+        y += 24.0;
+    }
+
+    let listed = ctx.session.board().len();
+    let hidden = listed.saturating_sub(rows);
+    let footer = if hidden > 0 {
+        format!("{listed} listings · {hidden} more below the fold")
+    } else {
+        format!("{listed} listings")
+    };
     draw_ui_text_ex(
-        &format!("{total} entities backing listings"),
+        &footer,
         rect.x + 16.0,
-        y,
-        TextStyle::new(15.0, dark::TEXT_BRIGHT).params(),
-    );
-    y += 26.0;
-    draw_ui_text_ex(
-        &format!(
-            "{} heroes alive of {}",
-            view.living_heroes(),
-            view.heroes.len()
-        ),
-        rect.x + 16.0,
-        y,
-        TextStyle::new(14.0, dark::TEXT_DIM).params(),
-    );
-    y += 22.0;
-    draw_ui_text_ex(
-        "houses and orders are priced on these",
-        rect.x + 16.0,
-        y,
-        TextStyle::new(13.0, dark::TEXT_DIM).params(),
+        rect.bottom() - 20.0,
+        TextStyle::new(14.0, dark::TEXT_BRIGHT).params(),
     );
 }
 

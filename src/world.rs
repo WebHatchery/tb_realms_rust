@@ -19,9 +19,11 @@
 //! The exchange is strictly downstream of the world.
 
 pub mod delta;
+pub mod fundamentals;
 pub mod live;
 
 pub use delta::WorldDelta;
+pub use fundamentals::Snapshot;
 
 use mytherra_protocol::WorldView;
 

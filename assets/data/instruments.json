@@ -1,0 +1,142 @@
+{
+  "_comment": [
+    "The instrument taxonomy (GDD 5.2) and the fair-value rule for each class",
+    "(GDD 5.4). This is data, never Rust constants: it is where a designer",
+    "decides what a province is worth relative to a bloodline.",
+    "",
+    "fair_value = base + sum(terms) + sum(scarcity) , floored, then multiplied by",
+    "every modifier whose condition the entity currently meets.",
+    "  terms    - weight * fundamental. The ordinary case.",
+    "  scarcity - weight / max(fundamental, 1). For claims that grow dearer as",
+    "             the thing behind them grows rarer, which is how a commodity",
+    "             prices a supply shock.",
+    "  modifiers- a multiplier applied while a flag or status reads a given way.",
+    "             'when' names the world's own variant, or true/false for a flag.",
+    "",
+    "'field' keys come from world::fundamentals::Field::key(); an unknown one is",
+    "a load error, not a silently ignored line. Every class in the taxonomy must",
+    "appear here exactly once (GDD 14, the no-orphan-instrument rule)."
+  ],
+  "classes": [
+    {
+      "id": "house_scrip",
+      "label": "House scrip",
+      "ticker_prefix": "H",
+      "base_value": 5.0,
+      "floor_value": 2.0,
+      "terms": [
+        { "field": "prestige", "weight": 0.30 },
+        { "field": "living_renown", "weight": 0.04 },
+        { "field": "living_members", "weight": 4.0 }
+      ],
+      "scarcity": [],
+      "modifiers": [],
+      "volatility": 0.14,
+      "liquidity": 0.30,
+      "income": null
+    },
+    {
+      "id": "order_charter",
+      "label": "Order charter",
+      "ticker_prefix": "O",
+      "base_value": 8.0,
+      "floor_value": 3.0,
+      "terms": [
+        { "field": "prestige", "weight": 0.50 },
+        { "field": "living_renown", "weight": 0.012 },
+        { "field": "living_members", "weight": 2.5 }
+      ],
+      "scarcity": [],
+      "modifiers": [],
+      "volatility": 0.10,
+      "liquidity": 0.45,
+      "income": null
+    },
+    {
+      "id": "regional_bond",
+      "label": "Regional bond",
+      "ticker_prefix": "R",
+      "base_value": 20.0,
+      "floor_value": 4.0,
+      "terms": [
+        { "field": "prosperity", "weight": 1.20 },
+        { "field": "harvest", "weight": 0.30 },
+        { "field": "cultural_influence", "weight": 0.10 },
+        { "field": "lore", "weight": 0.05 },
+        { "field": "chaos", "weight": -0.55 },
+        { "field": "danger", "weight": -0.40 },
+        { "field": "strife", "weight": -0.60 }
+      ],
+      "scarcity": [],
+      "modifiers": [
+        { "field": "famine", "when": "true", "factor": 0.70 },
+        { "field": "status", "when": "WarTorn", "factor": 0.62 },
+        { "field": "status", "when": "Struggling", "factor": 0.82 },
+        { "field": "status", "when": "Unrest", "factor": 0.93 },
+        { "field": "status", "when": "Prospering", "factor": 1.04 },
+        { "field": "status", "when": "Thriving", "factor": 1.10 }
+      ],
+      "volatility": 0.05,
+      "liquidity": 0.85,
+      "income": { "field": "prosperity", "rate": 0.06 }
+    },
+    {
+      "id": "settlement_share",
+      "label": "Settlement share",
+      "ticker_prefix": "S",
+      "base_value": 3.0,
+      "floor_value": 1.0,
+      "terms": [
+        { "field": "prosperity", "weight": 0.45 },
+        { "field": "population", "weight": 0.0035 }
+      ],
+      "scarcity": [],
+      "modifiers": [],
+      "volatility": 0.12,
+      "liquidity": 0.25,
+      "income": { "field": "prosperity", "rate": 0.02 }
+    },
+    {
+      "id": "route_toll",
+      "label": "Route toll",
+      "ticker_prefix": "T",
+      "base_value": 6.0,
+      "floor_value": 1.0,
+      "terms": [{ "field": "volume", "weight": 22.0 }],
+      "scarcity": [],
+      "modifiers": [],
+      "volatility": 0.08,
+      "liquidity": 0.50,
+      "income": { "field": "volume", "rate": 1.20 }
+    },
+    {
+      "id": "commodity",
+      "label": "Commodity",
+      "ticker_prefix": "C",
+      "base_value": 6.0,
+      "floor_value": 2.0,
+      "terms": [],
+      "scarcity": [{ "field": "nodes_producing", "weight": 260.0 }],
+      "modifiers": [],
+      "volatility": 0.16,
+      "liquidity": 0.70,
+      "income": null
+    },
+    {
+      "id": "relic_lot",
+      "label": "Relic lot",
+      "ticker_prefix": "X",
+      "base_value": 30.0,
+      "floor_value": 8.0,
+      "terms": [
+        { "field": "power", "weight": 26.0 },
+        { "field": "instability", "weight": -0.80 }
+      ],
+      "scarcity": [],
+      "modifiers": [],
+      "volatility": 0.09,
+      "liquidity": 0.06,
+      "income": null
+    }
+  ]
+}

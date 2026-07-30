@@ -1,9 +1,11 @@
 //! Embedded game data and the exchange's configuration.
 
+use crate::market::InstrumentRules;
 use macroquad_toolkit::data_loader::load_embedded_json_labeled;
 use serde::{Deserialize, Serialize};
 
 const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
+const INSTRUMENTS_JSON: &str = include_str!("../assets/data/instruments.json");
 
 /// Where the exchange reads its world, and how often (GDD 5.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +92,22 @@ fn env_override(key: &str) -> Option<String> {
 #[derive(Debug, Clone)]
 pub struct GameData {
     pub config: GameConfig,
+    /// The instrument taxonomy and its fair-value rules (GDD 5.2, 5.4).
+    pub instruments: InstrumentRules,
 }
 
 impl GameData {
     pub fn load() -> Result<Self, String> {
+        let instruments: InstrumentRules =
+            load_embedded_json_labeled("instruments", INSTRUMENTS_JSON)?;
+        // A taxonomy missing a class, or pricing on a field the world does not
+        // carry, is a configuration error worth refusing to open the exchange
+        // over — the alternative is a listing that silently never appears.
+        instruments.validate()?;
+
         Ok(Self {
             config: load_embedded_json_labeled("game_config", GAME_CONFIG_JSON)?,
+            instruments,
         })
     }
 }

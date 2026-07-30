@@ -8,11 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `RustGames` catalog. You are a broker on the Tradeborn Exchange; every listing is a claim
 on an entity in a **read-only projection of the Mytherra world simulation** (`../mytherra/`).
 
-**Status: M0 complete — the world seam is live.** The template's grid/fog/energy starter is
-gone. `src/world.rs` is the seam, `src/world/live.rs` reads the shared Mytherra world over
-HTTP, and `src/world/delta.rs` turns consecutive world views into typed changes. There is no
-market yet: no instruments, no prices, no positions. `gdd.md` is the specification and the
-source of truth for everything still to build.
+**Status: M1 complete — the boards hang, derived wholly from the world.** The template's
+grid/fog/energy starter is gone. `src/world.rs` is the seam, `src/world/live.rs` reads the
+shared Mytherra world over HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the
+exchange's one vocabulary, and `src/world/delta.rs` diffs two such readings into typed
+changes. `src/market/instruments.rs` turns a reading into a `Board` of listings with fair
+values, driven by `assets/data/instruments.json`. There are still **no prices, no orders and
+no positions** — a price is what M2 lets drift toward these fair values, and the gap between
+the two is the game. `gdd.md` is the specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -94,6 +97,12 @@ If either is reverted upstream, this game loses most of its instrument taxonomy.
 - **`src/world.rs` is the most important file in the project.** One trait, `WorldSource`,
   with `poll`/`view`/`cursor`/`resume_from`/`status`. Everything above it is mode-agnostic;
   `game.rs` holds it as `Box<dyn WorldSource>` and does not know a wire exists.
+- **`world/fundamentals.rs` is the one reading of the world**, and both the delta and the
+  pricer go through it. `Snapshot::read(view)` yields per-entity `Field`-keyed values;
+  `delta::diff_snapshots` compares two of them and `market` values one of them. Reading the
+  world twice, separately, is what would make a listing's decomposition stop adding up — the
+  ticker telling one story and the fundamentals another. Add a new watched number *there*,
+  not in either consumer.
 - **The seam is poll-shaped, not blocking, and that is deliberate.** A networked source
   cannot answer "give me the world" synchronously without stalling the frame. An in-process
   source satisfies a poll trivially by always being ready; retrofitting a blocking trait to
@@ -150,12 +159,35 @@ Target layout (GDD §11) — `game.rs` state machine, `world.rs` + `world/{solo,
   A blank token is a loud configuration error, never a silent 401.
 - `TB_REALMS_SERVER_URL` overrides the URL on native.
 
-Planned data files per GDD §6: `instruments.json` (fair-value rules per class),
-`impacts.json`, `licences.json`, `achievements.json`, `strings.json`.
+`assets/data/instruments.json` is the taxonomy and the fair-value rule per class (GDD §5.2,
+§5.4), also embedded via `include_str!`. Its shape:
+
+```
+fair_value = base_value + Σ terms + Σ scarcity , floored at floor_value,
+             then × every modifier whose condition the entity currently meets
+```
+
+- `terms` — `weight × fundamental`, the ordinary case.
+- `scarcity` — `weight ÷ max(fundamental, 1)`. **This is how a commodity prices a supply
+  shock**: a storm that ruins the fields does not make grain worth less. Commodities are the
+  only class that uses it, and it is why they are aggregated per `ResourceType` rather than
+  per node.
+- `modifiers` — a multiplier while a flag or status reads a given way, keyed on the world's
+  own variant name (`WarTorn`, not `war_torn` — the labels come from `Debug`).
+- `income` — real per-settlement income, so `Instrument::yield_rate()` is measured rather
+  than declared. Only bonds, shares and tolls pay one.
+
+`InstrumentRules::validate()` runs at load and refuses to open the exchange if a class is
+missing, duplicated, or prices on a key `Field::from_key` does not know — the GDD §14
+no-orphan-instrument rule enforced at load rather than discovered in play.
+
+Still planned per GDD §6: `impacts.json`, `licences.json`, `achievements.json`,
+`strings.json`.
 
 **`impacts.json` is the balance surface of the entire game and must never become Rust
 constants** — it is where a designer tunes how hard a famine hits grain. `Field::key()` is
-the vocabulary it will key on, and every key is asserted distinct.
+the vocabulary it will key on, every key is asserted distinct, and every key round-trips
+through `Field::from_key`.
 
 `asset_packs.json` zips `assets/` into `assets.zip` at publish time (`delete_source: true`).
 
@@ -168,8 +200,10 @@ writes a PNG, and exits (compiled out on wasm32). Right now there is one boot st
 `portfolio`, …) via `begin_capture_scene` is part of building the screens.
 
 A capture runs in about a second of wall-clock, while the server ticks every ten, so a
-captured frame will normally show **zero settlements observed**. That is correct, not a bug:
-the world's clock is not the exchange's to hurry.
+captured frame will normally show a full board but **zero settlements observed**. That is
+correct, not a bug: the board hangs from the first view to arrive, while a settlement is
+only logged when the world actually turns, and the world's clock is not the exchange's to
+hurry.
 
 ## CI needs two repos
 
@@ -182,7 +216,13 @@ hand-edit would survive exactly until the next sync. Change it there and re-sync
 ## Known gaps
 
 - No root `catalog_thumbnail.png` — CI warns, and `publish.ps1` deploys it for the catalog card.
-- No market: no instruments, prices, orders, portfolio, or charts (M1–M3).
+- No prices, orders, portfolio or charts (M2–M3). The board shows fair value, which is not a
+  price and never will be.
+- **`instruments.json` is untuned against an old world.** The weights were set against a
+  freshly seeded Mytherra; the shared live world is past year 20,000, where settlements have
+  grown to carrying capacity and most resource nodes are worked out. Listings there span
+  ~40 to ~1050 with settlement shares dominating the top of the board. That is a balance
+  pass for M2, not a fault in the derivation.
 - `LiveWorld` re-reads the entire `WorldView` every poll — around 900 heroes' worth of JSON
   at present. Fine at a five-second cadence; if it stops being fine, the fix is a
   delta endpoint on the server, not a cache here.
@@ -197,10 +237,11 @@ hand-edit would survive exactly until the next sync. Change it there and re-sync
 GDD §13 is M0 seam → M1 instruments → M2 market → M3 floor UI → M4 chronicle/research →
 M5 licences and eras → M6 Live mode → M7 polish.
 
-**M0 is done, and M6 was folded into it** — Live is the mode that exists. What remains in
-GDD order: **M1 instruments** (derive listings from the `WorldView`, `instruments.json`,
-fair-value rules), then M2's pricing and orders. `market/` must not depend on macroquad, so
-the century-long backtest (GDD §14) can run headless.
+**M0 and M1 are done, and M6 was folded into M0** — Live is the mode that exists. What
+remains in GDD order: **M2 the market** — the five-term price formation of §5.4,
+`impacts.json` keyed on `Field`, order execution, fees, market impact, portfolio and P&L.
+`market/` must not depend on macroquad, so the century-long backtest (GDD §14) can run
+headless; keep it that way.
 
 The GDD's "the game must be complete and shippable without a server ever running" no longer
 holds as written: without a server there is no world. Restoring it means writing the Solo

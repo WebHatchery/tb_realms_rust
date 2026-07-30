@@ -7,10 +7,11 @@
 //! change to `Game::new` and nothing else in this file.
 
 use crate::data::GameData;
+use crate::market::BoardChange;
 use crate::state::{migrate_save_value, GameSession, SaveData};
 use crate::ui::{self, UiAction, UiContext};
 use crate::world::live::{LiveWorld, SpectatorClient};
-use crate::world::{SourceStatus, WorldSource};
+use crate::world::{Snapshot, SourceStatus, WorldSource};
 use macroquad::prelude::*;
 use macroquad_toolkit::events::EventBus;
 use macroquad_toolkit::notifications::{
@@ -28,6 +29,10 @@ pub struct Game {
     /// The chronicle cursor, mirrored here so it can be saved. The source owns
     /// the authoritative one; this follows it.
     cursor: u64,
+    /// The world tick the board was last hung from. The board is rebuilt when
+    /// this falls behind the world's own clock — which covers both the first
+    /// view to arrive and every turning after it — rather than every frame.
+    board_tick: Option<u64>,
     notifications: NotificationManager,
     events: EventBus<UiAction>,
     save_exists: bool,
@@ -71,6 +76,7 @@ impl Game {
             session: GameSession::new(),
             world,
             cursor: 0,
+            board_tick: None,
             notifications,
             events: EventBus::new(),
             save_exists: false,
@@ -84,18 +90,21 @@ impl Game {
         self.notifications.update(dt);
 
         // The world turns on its own schedule; the exchange only reads it.
-        if let Some(delta) = self.world.poll(dt) {
-            self.session.record(&delta);
+        let turning = self.world.poll(dt);
+        let board = self.rehang_board();
+
+        if let Some(delta) = turning {
+            self.session.record(&delta, &board);
             // Follow the source's cursor so a save records how far the exchange
             // has actually read.
             self.cursor = self.world.cursor();
 
-            if !delta.listed.is_empty() || !delta.delisted.is_empty() {
+            if !board.listed.is_empty() || !board.delisted.is_empty() {
                 self.notifications.info(format!(
                     "Year {}: {} listed, {} delisted",
                     delta.to_year,
-                    delta.listed.len(),
-                    delta.delisted.len()
+                    board.listed.len(),
+                    board.delisted.len()
                 ));
             } else if delta.is_empty() {
                 self.notifications
@@ -151,6 +160,22 @@ impl Game {
                 anchor: NotificationAnchor::BottomRight,
                 ..Default::default()
             });
+    }
+
+    /// Rebuild the board when the world's clock has moved past the one it was
+    /// hung from. Returns what changed, which is empty on the overwhelming
+    /// majority of frames — the world turns every few seconds and the exchange
+    /// draws sixty times a second.
+    fn rehang_board(&mut self) -> BoardChange {
+        let Some(view) = self.world.view() else {
+            return BoardChange::default();
+        };
+        if self.board_tick == Some(view.tick_count) {
+            return BoardChange::default();
+        }
+        self.board_tick = Some(view.tick_count);
+        let snapshot = Snapshot::read(view);
+        self.session.list(&snapshot, &self.data.instruments)
     }
 
     fn apply_action(&mut self, action: UiAction) {

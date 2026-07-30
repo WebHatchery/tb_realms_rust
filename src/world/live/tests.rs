@@ -161,7 +161,7 @@ fn a_turning_of_the_world_arrives_as_a_typed_delta() {
     for moved in delta.most_moved(5) {
         println!(
             "  {} {} {}",
-            moved.entity.class(),
+            moved.entity.listing_class().unwrap_or("world"),
             moved.entity.id(),
             moved.field.key()
         );

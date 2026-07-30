@@ -8,14 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `RustGames` catalog. You are a broker on the Tradeborn Exchange; every listing is a claim
 on an entity in a **read-only projection of the Mytherra world simulation** (`../mytherra/`).
 
-**Status: M1 complete — the boards hang, derived wholly from the world.** The template's
-grid/fog/energy starter is gone. `src/world.rs` is the seam, `src/world/live.rs` reads the
-shared Mytherra world over HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the
-exchange's one vocabulary, and `src/world/delta.rs` diffs two such readings into typed
-changes. `src/market/instruments.rs` turns a reading into a `Board` of listings with fair
-values, driven by `assets/data/instruments.json`. There are still **no prices, no orders and
-no positions** — a price is what M2 lets drift toward these fair values, and the gap between
-the two is the game. `gdd.md` is the specification and the source of truth.
+**Status: M1 complete; M2 half done — prices form and move.** The template's grid/fog/energy
+starter is gone. `src/world.rs` is the seam, `src/world/live.rs` reads the shared Mytherra
+world over HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the exchange's one
+vocabulary, and `src/world/delta.rs` diffs two such readings into typed changes.
+`src/market/instruments.rs` turns a reading into a `Board` of listings with fair values;
+`src/market/impact.rs` turns typed deltas into shocks; `src/market/pricing.rs` moves each
+price by drift + shock + noise + flow and keeps the decomposition. What remains of M2 is the
+**order side**: no orders, no positions, no P&L, so the `flow` term is always zero.
+`gdd.md` is the specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live

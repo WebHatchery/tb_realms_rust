@@ -5,11 +5,13 @@
 //! world — a panel that wants something adds a variant here and the dispatcher
 //! in `game.rs` decides what it means.
 //!
-//! What it draws today is the board the world hangs: every listing the world
-//! currently backs, what the fundamentals say it is worth, and what it pays —
-//! beside the settlements as they land. There are no prices yet, so the board
-//! shows fair value, which is the number a price will spend the whole game
-//! failing to sit on. Charts, order tickets and the research browser are M3.
+//! What it draws today is the board the world hangs — every listing, its price,
+//! what the fundamentals say it is worth, and the gap between the two — beside
+//! the movers with their price moves decomposed, and the settlements as they
+//! land. Charts, order tickets and the research browser are M3.
+//!
+//! The decomposition panel is Pillar 1 made visible: ask why a price moved and
+//! the answer is drift, shock and noise in crowns, never a shrug.
 
 use crate::data::GameData;
 use crate::market::Instrument;
@@ -48,6 +50,7 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
 
     draw_header(&ctx);
     draw_listings_panel(&ctx);
+    draw_movers_panel(&ctx);
     draw_settlements_panel(&ctx);
     draw_footer(&ctx, mouse, &mut actions);
 
@@ -125,7 +128,7 @@ fn ranked_listings(session: &GameSession) -> Vec<&Instrument> {
 }
 
 fn draw_listings_panel(ctx: &UiContext<'_>) {
-    let rect = Rect::new(18.0, 104.0, 560.0, 452.0);
+    let rect = Rect::new(18.0, 104.0, 640.0, 452.0);
     panel(rect, "The board");
 
     if ctx.session.board().is_empty() {
@@ -139,13 +142,19 @@ fn draw_listings_panel(ctx: &UiContext<'_>) {
     }
 
     let ranked = ranked_listings(ctx.session);
-    let value_x = rect.right() - 148.0;
-    let yield_x = rect.right() - 74.0;
+    let price_x = rect.right() - 268.0;
+    let change_x = rect.right() - 206.0;
+    let fair_x = rect.right() - 142.0;
+    let premium_x = rect.right() - 82.0;
+    let yield_x = rect.right() - 30.0;
     let mut y = rect.y + 52.0;
     for (label, x) in [
         ("SYM", rect.x + 16.0),
-        ("BACKED BY", rect.x + 76.0),
-        ("FAIR", value_x),
+        ("BACKED BY", rect.x + 72.0),
+        ("PRICE", price_x),
+        ("CHG", change_x),
+        ("FAIR", fair_x),
+        ("PREM", premium_x),
         ("YIELD", yield_x),
     ] {
         draw_ui_text_ex(label, x, y, TextStyle::new(12.0, dark::TEXT_DIM).params());
@@ -161,28 +170,52 @@ fn draw_listings_panel(ctx: &UiContext<'_>) {
             TextStyle::new(15.0, dark::TEXT_BRIGHT).params(),
         );
         draw_ui_text_ex(
-            &truncate(&listing.name, 26),
-            rect.x + 76.0,
+            &truncate(&listing.name, 22),
+            rect.x + 72.0,
             y,
             TextStyle::new(14.0, dark::TEXT).params(),
         );
         draw_ui_text_ex(
-            &format!("{:.1}", listing.fair_value),
-            value_x,
+            &format!("{:.1}", listing.price),
+            price_x,
             y,
-            TextStyle::new(14.0, dark::TEXT).params(),
+            TextStyle::new(14.0, dark::TEXT_BRIGHT).params(),
         );
+
+        let change = listing.last_move.change_fraction();
+        draw_ui_text_ex(
+            &signed_percent(change),
+            change_x,
+            y,
+            TextStyle::new(14.0, direction(change)).params(),
+        );
+        draw_ui_text_ex(
+            &format!("{:.1}", listing.fair_value),
+            fair_x,
+            y,
+            TextStyle::new(14.0, dark::TEXT_DIM).params(),
+        );
+        // The premium is the number a broker is actually trading: how far the
+        // floor sits from what the world says the claim is worth.
+        let premium = listing.premium();
+        draw_ui_text_ex(
+            &signed_percent(premium),
+            premium_x,
+            y,
+            // Coloured by whether it is *cheap*, not by whether it is up: a
+            // listing trading under fair value is the buy, so the sign the
+            // broker wants is the opposite of the one the price wants.
+            TextStyle::new(13.0, direction(-premium)).params(),
+        );
+
         // A listing that pays nothing says so plainly rather than printing a
         // zero that reads like a collapsed coupon.
         let (paid, tint) = if listing.income > 0.0 {
-            (
-                format!("{:.1}%", listing.yield_rate() * 100.0),
-                Color::new(0.55, 0.78, 0.60, 1.0),
-            )
+            (format!("{:.1}%", listing.yield_rate() * 100.0), dark::TEXT)
         } else {
             ("—".to_owned(), dark::TEXT_DIM)
         };
-        draw_ui_text_ex(&paid, yield_x, y, TextStyle::new(14.0, tint).params());
+        draw_ui_text_ex(&paid, yield_x, y, TextStyle::new(13.0, tint).params());
         y += 24.0;
     }
 
@@ -201,8 +234,101 @@ fn draw_listings_panel(ctx: &UiContext<'_>) {
     );
 }
 
+/// What moved furthest this settlement, and why (GDD 5.4).
+///
+/// This is the price-move decomposition: every term that pushed the price is
+/// named in crowns, and the terms sum to the move. A player must always be able
+/// to ask why and get an answer — Pillar 1 does not permit a shrug.
+fn draw_movers_panel(ctx: &UiContext<'_>) {
+    let rect = Rect::new(674.0, 104.0, LOGICAL_WIDTH - 692.0, 236.0);
+    panel(rect, "Why it moved");
+
+    let mut movers: Vec<&Instrument> = ctx
+        .session
+        .board()
+        .listings()
+        .filter(|listing| listing.last_move.change() != 0.0)
+        .collect();
+    if movers.is_empty() {
+        draw_ui_text_ex(
+            "nothing has moved — the world has not turned yet",
+            rect.x + 16.0,
+            rect.y + 56.0,
+            TextStyle::new(14.0, dark::TEXT_DIM).params(),
+        );
+        return;
+    }
+    movers.sort_by(|a, b| {
+        b.last_move
+            .change_fraction()
+            .abs()
+            .total_cmp(&a.last_move.change_fraction().abs())
+    });
+
+    let mut y = rect.y + 54.0;
+    for listing in movers.iter().take(4) {
+        let change = listing.last_move.change_fraction();
+        draw_ui_text_ex(
+            &listing.symbol,
+            rect.x + 16.0,
+            y,
+            TextStyle::new(15.0, dark::TEXT_BRIGHT).params(),
+        );
+        draw_ui_text_ex(
+            &truncate(&listing.name, 24),
+            rect.x + 72.0,
+            y,
+            TextStyle::new(14.0, dark::TEXT).params(),
+        );
+        draw_ui_text_ex(
+            &signed_percent(change),
+            rect.right() - 62.0,
+            y,
+            TextStyle::new(14.0, direction(change)).params(),
+        );
+        y += 18.0;
+
+        // What it is a claim on, named — Pillar 1 again: never a free-floating
+        // number. `depth` is the class's liquidity: how much paper the floor
+        // will actually take, which is why a relic lot is not a bond.
+        draw_ui_text_ex(
+            &truncate(
+                &format!(
+                    "{} · {} · listed {} · depth {:.0}%",
+                    listing.class,
+                    listing.entity.id(),
+                    listing.listed_year,
+                    listing.liquidity * 100.0
+                ),
+                62,
+            ),
+            rect.x + 24.0,
+            y,
+            TextStyle::new(12.0, dark::TEXT_DIM).params(),
+        );
+        y += 17.0;
+
+        let parts: Vec<String> = listing
+            .last_move
+            .parts()
+            .into_iter()
+            .map(|(name, value)| format!("{name} {value:+.2}"))
+            .collect();
+        draw_ui_text_ex(
+            &truncate(&parts.join("   "), 62),
+            rect.x + 24.0,
+            y,
+            TextStyle::new(13.0, dark::TEXT).params(),
+        );
+        y += 22.0;
+        if y > rect.bottom() - 20.0 {
+            break;
+        }
+    }
+}
+
 fn draw_settlements_panel(ctx: &UiContext<'_>) {
-    let rect = Rect::new(594.0, 104.0, LOGICAL_WIDTH - 612.0, 452.0);
+    let rect = Rect::new(674.0, 348.0, LOGICAL_WIDTH - 692.0, 208.0);
     panel(rect, "Settlements");
 
     if ctx.session.settlements().is_empty() {
@@ -296,6 +422,19 @@ fn draw_footer(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         rect.y + 56.0,
         TextStyle::new(15.0, dark::TEXT).params(),
     );
+    // The market's noise stream, seed and all. Same stream plus the same orders
+    // reproduces the same century exactly (GDD 5.8), so it is shown rather than
+    // hidden — a player can check that the floor is not cheating.
+    draw_ui_text_ex(
+        &format!(
+            "market stream {:016x} from seed {}",
+            ctx.session.market_state(),
+            ctx.data.config.market.seed
+        ),
+        rect.x + 340.0,
+        rect.y + 56.0,
+        TextStyle::new(13.0, dark::TEXT_DIM).params(),
+    );
     draw_ui_text_ex(
         "The exchange reads this world and cannot touch it.",
         rect.x + 16.0,
@@ -354,6 +493,34 @@ fn draw_button(rect: Rect, label: &str, mouse: Vec2, enabled: bool) -> bool {
         TextStyle::new(16.0, text).params(),
     );
     hovered && is_mouse_button_released(MouseButton::Left)
+}
+
+/// A move as a signed percentage, or a dash when it did not really move.
+///
+/// The sign is always printed. That is deliberate: it makes direction legible
+/// without colour, which is the accessibility half of the pair below.
+fn signed_percent(fraction: f32) -> String {
+    if fraction.abs() < 0.0005 {
+        return "—".to_owned();
+    }
+    format!("{:+.1}%", fraction * 100.0)
+}
+
+/// Up and down, told apart by more than colour (GDD 12, open question 5).
+///
+/// Red/green is the market convention and the worst possible choice for
+/// colour-blind players — those are precisely the two hues a red-green
+/// deficiency cannot separate. So this is teal against amber, which stays
+/// distinguishable under every common deficiency, and the sign printed beside it
+/// carries the meaning on its own regardless.
+fn direction(change: f32) -> Color {
+    if change > 0.0005 {
+        Color::new(0.36, 0.78, 0.72, 1.0)
+    } else if change < -0.0005 {
+        Color::new(0.93, 0.65, 0.30, 1.0)
+    } else {
+        dark::TEXT_DIM
+    }
 }
 
 /// Clip a line to `max` characters, on a character boundary so multi-byte

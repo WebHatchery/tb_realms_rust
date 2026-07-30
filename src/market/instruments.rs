@@ -12,7 +12,10 @@
 //! worth; the price M2 introduces drifts toward it and rarely arrives. Skill is
 //! estimating this number before the market's drift closes the gap.
 
+use crate::market::pricing::{self, MarketConfig, PriceMove};
 use crate::world::fundamentals::{EntityRef, Field, Fundamentals, Snapshot};
+use macroquad_toolkit::rng::SeededRng;
+use macroquad_toolkit::series::Series;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -122,7 +125,7 @@ impl InstrumentRules {
 }
 
 /// A tradeable claim on one world entity.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Instrument {
     /// The board's short name for it, unique across the board.
     pub symbol: String,
@@ -133,10 +136,21 @@ pub struct Instrument {
     pub class: String,
     /// What the fundamentals say the claim is worth, this settlement.
     pub fair_value: f32,
+    /// What it actually trades at. A listing is born priced fairly and is
+    /// almost never priced fairly again — the gap between this and
+    /// `fair_value` is the entire game (GDD 5.4).
+    pub price: f32,
+    /// Where the price stood before the last turning.
+    pub previous_close: f32,
     /// What holding one unit pays each settlement.
     pub income: f32,
     pub volatility: f32,
     pub liquidity: f32,
+    /// Every price this listing has ever traded at, bounded but never losing an
+    /// extreme — the spike that mattered survives a century of decimation.
+    pub history: Series,
+    /// Why the price last moved, decomposed (GDD 5.4).
+    pub last_move: PriceMove,
     /// The world year the listing first appeared.
     pub listed_year: u32,
 }
@@ -149,6 +163,16 @@ impl Instrument {
             return 0.0;
         }
         self.income / self.fair_value
+    }
+
+    /// How far the price sits from what the fundamentals say, as a fraction.
+    /// Positive means the floor is paying over the odds. This is the number a
+    /// broker is actually trading.
+    pub fn premium(&self) -> f32 {
+        if self.fair_value.abs() < f32::EPSILON {
+            return 0.0;
+        }
+        (self.price - self.fair_value) / self.fair_value
     }
 }
 
@@ -187,7 +211,12 @@ impl Board {
     /// it no longer carries is struck off. A delisted instrument is *gone* from
     /// the board — its history belongs to the records archive, which is what an
     /// Archivist licence is for (GDD 12, open question 6).
-    pub fn refresh(&mut self, snapshot: &Snapshot, rules: &InstrumentRules) -> BoardChange {
+    pub fn refresh(
+        &mut self,
+        snapshot: &Snapshot,
+        rules: &InstrumentRules,
+        market: &MarketConfig,
+    ) -> BoardChange {
         let mut change = BoardChange::default();
 
         for entry in snapshot.iter() {
@@ -211,6 +240,12 @@ impl Board {
                 None => {
                     let symbol = self.mint_symbol(&rule.ticker_prefix, &entry.name);
                     change.listed.push(symbol.clone());
+                    // A listing opens at fair value — the one moment in its life
+                    // the floor and the fundamentals agree — and starts drifting
+                    // apart on the next turning.
+                    let price = fair_value.max(market.min_price);
+                    let mut history = Series::new(market.history_capacity);
+                    history.push(price);
                     self.listings.insert(
                         entry.entity.clone(),
                         Instrument {
@@ -219,9 +254,13 @@ impl Board {
                             entity: entry.entity.clone(),
                             class: rule.label.clone(),
                             fair_value,
+                            price,
+                            previous_close: price,
                             income,
                             volatility: rule.volatility,
                             liquidity: rule.liquidity,
+                            history,
+                            last_move: PriceMove::unmoved(price),
                             listed_year: snapshot.year,
                         },
                     );
@@ -241,6 +280,37 @@ impl Board {
         }
 
         change
+    }
+
+    /// Move every price by one settlement (GDD 5.4).
+    ///
+    /// `shocks` and `flow` are keyed by entity and carry fractions of price; a
+    /// listing absent from either simply takes no such term. Listings are
+    /// settled in the board's own stable order and share one noise stream, so
+    /// the same seed and the same orders reproduce the same century exactly —
+    /// which is what the determinism test of GDD 14 asserts.
+    pub fn settle(
+        &mut self,
+        shocks: &BTreeMap<EntityRef, f32>,
+        flow: &BTreeMap<EntityRef, f32>,
+        market: &MarketConfig,
+        rng: &mut SeededRng,
+    ) {
+        for (entity, listing) in &mut self.listings {
+            let moved = pricing::settle(
+                listing.price,
+                listing.fair_value,
+                listing.volatility,
+                shocks.get(entity).copied().unwrap_or(0.0),
+                flow.get(entity).copied().unwrap_or(0.0),
+                market,
+                rng,
+            );
+            listing.previous_close = moved.from;
+            listing.price = moved.to;
+            listing.last_move = moved;
+            listing.history.push(moved.to);
+        }
     }
 
     /// Every listing, in a stable order.

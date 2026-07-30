@@ -13,11 +13,14 @@
 //! the exchange's idea of what exists to drift from the world's.
 
 use crate::data::GameConfig;
-use crate::market::{Board, BoardChange, InstrumentRules};
+use crate::market::{Board, BoardChange, ImpactTable, InstrumentRules, MarketConfig};
 use crate::world::delta::{Change, WorldDelta};
+use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
+use macroquad_toolkit::rng::SeededRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// How many settlements the in-memory log keeps. The exchange runs for
 /// centuries, so this is a display buffer, not the archive; the archive is the
@@ -121,16 +124,26 @@ pub struct SaveData {
     pub cursor: u64,
     /// The world tick the exchange had last seen.
     pub last_tick: u64,
+    /// The market noise stream's state, so a reloaded exchange draws the same
+    /// numbers it would have drawn had it never closed (GDD 5.8). Defaulted so
+    /// a save written before prices existed still loads.
+    #[serde(default)]
+    pub market_state: u64,
 }
 
 /// The live session.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct GameSession {
     /// Settlements observed, newest first.
     settlements: Vec<SettlementRecord>,
     /// What the exchange currently lists — the world's own answer, not the
     /// exchange's opinion.
     board: Board,
+    /// The market's own noise stream, kept apart from anything the world uses
+    /// so the two cannot desynchronise each other (GDD 5.8). Its state is saved,
+    /// so a reloaded exchange continues the same century rather than starting a
+    /// new one.
+    market_rng: SeededRng,
     /// The world tick last seen, or zero before the first world arrives.
     pub last_tick: u64,
     /// Total settlements observed this session, which outlives the bounded log.
@@ -138,8 +151,14 @@ pub struct GameSession {
 }
 
 impl GameSession {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(market: &MarketConfig) -> Self {
+        Self {
+            settlements: Vec::new(),
+            board: Board::new(),
+            market_rng: SeededRng::new(market.seed),
+            last_tick: 0,
+            observed: 0,
+        }
     }
 
     /// Bring the board in line with a fresh reading of the world.
@@ -147,8 +166,39 @@ impl GameSession {
     /// Separate from [`record`](Self::record) because the two answer different
     /// questions: the board must hang the moment the world first answers, while
     /// a settlement is only logged when the world actually turns.
-    pub fn list(&mut self, snapshot: &Snapshot, rules: &InstrumentRules) -> BoardChange {
-        self.board.refresh(snapshot, rules)
+    pub fn list(
+        &mut self,
+        snapshot: &Snapshot,
+        rules: &InstrumentRules,
+        market: &MarketConfig,
+    ) -> BoardChange {
+        self.board.refresh(snapshot, rules, market)
+    }
+
+    /// Move every price by one settlement (GDD 5.4).
+    ///
+    /// Called only when the world has actually turned — a price that moved on a
+    /// frame where nothing happened would be noise the player cannot trace to
+    /// anything, which is exactly what Pillar 1 forbids.
+    pub fn settle_prices(
+        &mut self,
+        delta: &WorldDelta,
+        snapshot: &Snapshot,
+        impacts: &ImpactTable,
+        market: &MarketConfig,
+    ) {
+        let shocks = impacts.shocks(delta, snapshot);
+        // No orders yet, so the player's own flow moves nothing (GDD 5.4's
+        // fifth term). Order execution fills this in.
+        let flow: BTreeMap<EntityRef, f32> = BTreeMap::new();
+        self.board
+            .settle(&shocks, &flow, market, &mut self.market_rng);
+    }
+
+    /// The market noise stream's whole state — its seed and everything drawn
+    /// from it since. Shown on the records screen, and saved.
+    pub fn market_state(&self) -> u64 {
+        self.market_rng.state()
     }
 
     /// Record a turning of the world, and what it did to the board.
@@ -174,16 +224,24 @@ impl GameSession {
             version: version.to_owned(),
             cursor,
             last_tick: self.last_tick,
+            market_state: self.market_rng.state(),
         }
     }
 
-    pub fn from_save(save: &SaveData) -> Self {
+    pub fn from_save(save: &SaveData, market: &MarketConfig) -> Self {
         Self {
             settlements: Vec::new(),
             // The board is a function of the world, so it is rebuilt from the
             // next read rather than restored from a save that could disagree
             // with what the world now carries.
             board: Board::new(),
+            // A state of zero means a save written before prices existed; start
+            // that session's stream from the seed rather than from nothing.
+            market_rng: if save.market_state == 0 {
+                SeededRng::new(market.seed)
+            } else {
+                SeededRng::from_state(save.market_state)
+            },
             last_tick: save.last_tick,
             observed: 0,
         }
@@ -211,13 +269,33 @@ pub fn migrate_save_value(
         version: config.version.clone(),
         cursor: 0,
         last_tick: 0,
+        market_state: 0,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::GameData;
     use crate::world::delta::WorldDelta;
+    use mytherra_protocol::{project_world, spectator_standing, WorldView};
+
+    fn data() -> GameData {
+        GameData::load().expect("the exchange's data loads")
+    }
+
+    fn market() -> MarketConfig {
+        data().config.market
+    }
+
+    /// A freshly seeded world as a spectator receives it.
+    fn world() -> WorldView {
+        let content = mytherra_core::data::GameData::load().expect("mytherra content loads");
+        project_world(
+            &mytherra_core::world::WorldState::new(&content),
+            &spectator_standing(),
+        )
+    }
 
     fn delta(year: u32, tick: u64) -> WorldDelta {
         WorldDelta {
@@ -230,7 +308,7 @@ mod tests {
 
     #[test]
     fn settlements_are_logged_newest_first_and_bounded() {
-        let mut session = GameSession::new();
+        let mut session = GameSession::new(&market());
         for year in 1..=(LOG_CAPACITY as u32 + 10) {
             session.record(&delta(year, year as u64), &BoardChange::default());
         }
@@ -253,11 +331,11 @@ mod tests {
 
     #[test]
     fn a_save_round_trips_the_cursor_and_tick() {
-        let mut session = GameSession::new();
+        let mut session = GameSession::new(&market());
         session.record(&delta(341, 17), &BoardChange::default());
 
         let save = session.to_save("0.1.0", 4_212);
-        let resumed = GameSession::from_save(&save);
+        let resumed = GameSession::from_save(&save, &market());
 
         assert_eq!(resumed.last_tick, 17);
         // Neither the log nor the board is persisted — the log is a display
@@ -269,18 +347,11 @@ mod tests {
 
     #[test]
     fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
-        use crate::data::GameData;
-        use mytherra_protocol::{project_world, spectator_standing};
+        let rules = data().instruments;
+        let view = world();
 
-        let rules = GameData::load().unwrap().instruments;
-        let content = mytherra_core::data::GameData::load().unwrap();
-        let view = project_world(
-            &mytherra_core::world::WorldState::new(&content),
-            &spectator_standing(),
-        );
-
-        let mut session = GameSession::new();
-        let opening = session.list(&Snapshot::read(&view), &rules);
+        let mut session = GameSession::new(&market());
+        let opening = session.list(&Snapshot::read(&view), &rules, &market());
 
         assert!(!session.board().is_empty(), "the world hangs the board");
         assert_eq!(opening.listed.len(), session.board().len());
@@ -290,7 +361,7 @@ mod tests {
         // town reads as paper struck off rather than as an entity count.
         let mut razed = view.clone();
         let lost = razed.settlements.remove(0);
-        let change = session.list(&Snapshot::read(&razed), &rules);
+        let change = session.list(&Snapshot::read(&razed), &rules, &market());
         session.record(&delta(razed.year + 1, 2), &change);
 
         assert_eq!(change.delisted.len(), 1);
@@ -311,16 +382,11 @@ mod tests {
 
     #[test]
     fn an_unreadable_save_starts_fresh_rather_than_failing() {
+        // The shipped config with only the version bumped, so a field added to
+        // it later cannot make this test lie about what migration does.
         let config = GameConfig {
-            game_name: "tb_realms".to_owned(),
-            display_name: "Tradeborn Realms".to_owned(),
-            save_slot: "autosave".to_owned(),
             version: "0.2.0".to_owned(),
-            server_url: "http://127.0.0.1:8791".to_owned(),
-            gateway_url: String::new(),
-            spectator_token: String::new(),
-            view_poll_seconds: 5.0,
-            request_timeout_seconds: 15.0,
+            ..data().config
         };
         let value = serde_json::json!({ "nonsense": true });
 
@@ -333,16 +399,11 @@ mod tests {
 
     #[test]
     fn a_current_save_survives_migration_with_its_cursor_intact() {
+        // The shipped config with only the version bumped, so a field added to
+        // it later cannot make this test lie about what migration does.
         let config = GameConfig {
-            game_name: "tb_realms".to_owned(),
-            display_name: "Tradeborn Realms".to_owned(),
-            save_slot: "autosave".to_owned(),
             version: "0.2.0".to_owned(),
-            server_url: "http://127.0.0.1:8791".to_owned(),
-            gateway_url: String::new(),
-            spectator_token: String::new(),
-            view_poll_seconds: 5.0,
-            request_timeout_seconds: 15.0,
+            ..data().config
         };
         let value = serde_json::json!({
             "version": "0.1.0",

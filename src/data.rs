@@ -1,11 +1,12 @@
 //! Embedded game data and the exchange's configuration.
 
-use crate::market::InstrumentRules;
+use crate::market::{ImpactTable, InstrumentRules, MarketConfig};
 use macroquad_toolkit::data_loader::load_embedded_json_labeled;
 use serde::{Deserialize, Serialize};
 
 const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
 const INSTRUMENTS_JSON: &str = include_str!("../assets/data/instruments.json");
+const IMPACTS_JSON: &str = include_str!("../assets/data/impacts.json");
 
 /// Where the exchange reads its world, and how often (GDD 5.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,8 @@ pub struct GameConfig {
     pub view_poll_seconds: f32,
     /// Seconds before a read in flight is treated as failed.
     pub request_timeout_seconds: f32,
+    /// How prices form (GDD 5.4).
+    pub market: MarketConfig,
 }
 
 impl GameConfig {
@@ -94,6 +97,8 @@ pub struct GameData {
     pub config: GameConfig,
     /// The instrument taxonomy and its fair-value rules (GDD 5.2, 5.4).
     pub instruments: InstrumentRules,
+    /// The state-delta → price-shock table (GDD 5.5).
+    pub impacts: ImpactTable,
 }
 
 impl GameData {
@@ -105,9 +110,15 @@ impl GameData {
         // over — the alternative is a listing that silently never appears.
         instruments.validate()?;
 
+        let impacts: ImpactTable = load_embedded_json_labeled("impacts", IMPACTS_JSON)?;
+        // Likewise a shock rule that can never fire: a mistyped field key looks
+        // exactly like a balance value someone deliberately set to zero.
+        impacts.validate()?;
+
         Ok(Self {
             config: load_embedded_json_labeled("game_config", GAME_CONFIG_JSON)?,
             instruments,
+            impacts,
         })
     }
 }

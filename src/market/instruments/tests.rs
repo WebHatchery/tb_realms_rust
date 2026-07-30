@@ -25,11 +25,18 @@ fn rules() -> InstrumentRules {
         .instruments
 }
 
+fn market() -> MarketConfig {
+    GameData::load()
+        .expect("the exchange's data loads")
+        .config
+        .market
+}
+
 /// A board opened straight onto a world.
 fn board_over(view: &mytherra_protocol::WorldView) -> (Board, InstrumentRules) {
     let rules = rules();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(view), &rules);
+    board.refresh(&Snapshot::read(view), &rules, &market());
     (board, rules)
 }
 
@@ -145,7 +152,7 @@ fn a_famine_marks_a_regional_bond_down() {
 
     let mut struck = view.clone();
     struck.regions[0].famine = true;
-    let change = board.refresh(&Snapshot::read(&struck), &rules);
+    let change = board.refresh(&Snapshot::read(&struck), &rules, &market());
     let after = listing_named(&board, &region.name).fair_value;
 
     assert!(
@@ -173,7 +180,7 @@ fn a_supply_shock_makes_a_commodity_dearer_rather_than_cheaper() {
             node.status = ResourceStatus::Depleted;
         }
     }
-    board.refresh(&Snapshot::read(&struck), &rules);
+    board.refresh(&Snapshot::read(&struck), &rules, &market());
     let after = listing_named(&board, label).fair_value;
 
     assert!(
@@ -198,18 +205,18 @@ fn a_house_lists_when_it_is_founded_and_delists_when_its_blood_runs_out() {
         member_ids: vec![founded.heroes[0].id.clone()],
         prestige: 400.0,
     });
-    let listing = board.refresh(&Snapshot::read(&founded), &rules);
+    let listing = board.refresh(&Snapshot::read(&founded), &rules, &market());
     assert_eq!(listing.listed, vec!["HBAL".to_owned()]);
     assert_eq!(board.len(), opened + 1);
 
     // The line dies out and the paper is struck off — the exchange does not keep
     // trading a claim on something that no longer exists.
-    let struck = board.refresh(&Snapshot::read(&view), &rules);
+    let struck = board.refresh(&Snapshot::read(&view), &rules, &market());
     assert_eq!(struck.delisted, vec!["HBAL".to_owned()]);
     assert_eq!(board.len(), opened);
 
     // And the ticker is free again, so a later house may take it.
-    let relisted = board.refresh(&Snapshot::read(&founded), &rules);
+    let relisted = board.refresh(&Snapshot::read(&founded), &rules, &market());
     assert_eq!(relisted.listed, vec!["HBAL".to_owned()]);
 }
 
@@ -237,7 +244,7 @@ fn a_houses_worth_follows_its_living_renown_not_its_lineage() {
     // and only the living figures move — nine tenths of the renown is gone.
     let mut bereft = view.clone();
     bereft.heroes[0].is_alive = false;
-    board.refresh(&Snapshot::read(&bereft), &rules);
+    board.refresh(&Snapshot::read(&bereft), &rules, &market());
     let after = listing_named(&board, "Aldwin").fair_value;
 
     assert!(
@@ -293,7 +300,7 @@ fn a_ruined_province_is_floored_rather_than_priced_below_nothing() {
     struck.danger = 100.0;
     struck.strife = 100.0;
     struck.famine = true;
-    board.refresh(&Snapshot::read(&ruined), &rules);
+    board.refresh(&Snapshot::read(&ruined), &rules, &market());
 
     let value = listing_named(&board, &region.name).fair_value;
     assert!(value > 0.0, "a claim never prices through zero: {value}");
@@ -331,7 +338,7 @@ fn two_listings_with_the_same_letters_are_told_apart() {
             prestige: 10.0,
         });
     }
-    let change = board.refresh(&Snapshot::read(&twins), &rules);
+    let change = board.refresh(&Snapshot::read(&twins), &rules, &market());
 
     assert_eq!(change.listed, vec!["HGRE".to_owned(), "HGRE2".to_owned()]);
 }

@@ -71,9 +71,10 @@ impl Game {
                 }
             };
 
+        let session = GameSession::new(&data.config.market);
         let mut game = Self {
             data,
-            session: GameSession::new(),
+            session,
             world,
             cursor: 0,
             board_tick: None,
@@ -91,7 +92,7 @@ impl Game {
 
         // The world turns on its own schedule; the exchange only reads it.
         let turning = self.world.poll(dt);
-        let board = self.rehang_board();
+        let board = self.rehang_board(turning.as_ref());
 
         if let Some(delta) = turning {
             self.session.record(&delta, &board);
@@ -163,10 +164,19 @@ impl Game {
     }
 
     /// Rebuild the board when the world's clock has moved past the one it was
-    /// hung from. Returns what changed, which is empty on the overwhelming
-    /// majority of frames — the world turns every few seconds and the exchange
-    /// draws sixty times a second.
-    fn rehang_board(&mut self) -> BoardChange {
+    /// hung from, and settle every price if the world actually turned. Returns
+    /// what changed, which is empty on the overwhelming majority of frames — the
+    /// world turns every few seconds and the exchange draws sixty times a
+    /// second.
+    ///
+    /// The order matters. Listings are refreshed first so a settlement prices
+    /// against the fair values the *new* world implies, and only then do prices
+    /// move toward them. Settling first would drift every price toward a fair
+    /// value one year stale.
+    ///
+    /// `turning` is `None` on the first view to arrive: the board hangs, but
+    /// nothing settles, because no year has passed for the exchange to price.
+    fn rehang_board(&mut self, turning: Option<&crate::world::WorldDelta>) -> BoardChange {
         let Some(view) = self.world.view() else {
             return BoardChange::default();
         };
@@ -174,8 +184,20 @@ impl Game {
             return BoardChange::default();
         }
         self.board_tick = Some(view.tick_count);
+
         let snapshot = Snapshot::read(view);
-        self.session.list(&snapshot, &self.data.instruments)
+        let change = self
+            .session
+            .list(&snapshot, &self.data.instruments, &self.data.config.market);
+        if let Some(delta) = turning {
+            self.session.settle_prices(
+                delta,
+                &snapshot,
+                &self.data.impacts,
+                &self.data.config.market,
+            );
+        }
+        change
     }
 
     fn apply_action(&mut self, action: UiAction) {
@@ -219,7 +241,7 @@ impl Game {
                 // Tell the world source too, or the next read would re-serve
                 // every chronicle line the exchange had already read.
                 self.world.resume_from(save.cursor);
-                self.session = GameSession::from_save(&save);
+                self.session = GameSession::from_save(&save, &self.data.config.market);
                 self.notifications.success("Ledger loaded");
                 self.refresh_save_state();
             }

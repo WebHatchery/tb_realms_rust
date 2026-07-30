@@ -7,5 +7,13 @@
   "gateway_url": "https://webhatchery.au/local_gateway/api/p/mytherra",
   "spectator_token": "",
   "view_poll_seconds": 5.0,
-  "request_timeout_seconds": 15.0
+  "request_timeout_seconds": 15.0,
+  "market": {
+    "seed": 20260726,
+    "mean_reversion": 0.18,
+    "noise_scale": 1.0,
+    "max_move": 0.35,
+    "min_price": 0.25,
+    "history_capacity": 256
+  }
 }

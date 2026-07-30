@@ -214,12 +214,22 @@ pub enum Value {
     Status(String),
 }
 
-/// One entity's watched numbers.
+/// One entity's watched numbers, and where it sits in the world.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fundamentals {
     pub entity: EntityRef,
     /// The entity's name in the world's own words, for the boards.
     pub name: String,
+    /// The entity this one belongs to: a town's province, a node's commodity, a
+    /// house's seat. News travels along this link in both directions — a node
+    /// depleting reaches the commodity above it, a province's famine reaches the
+    /// towns below it — which is what lets `impacts.json` price a shock on
+    /// something other than the entity it happened to.
+    ///
+    /// A trade route has two endpoints and so has no single parent; an Order
+    /// spans the world and belongs to no province. Both are `None`, and their
+    /// news is their own.
+    pub parent: Option<EntityRef>,
     pub values: BTreeMap<Field, Value>,
 }
 
@@ -228,8 +238,14 @@ impl Fundamentals {
         Self {
             entity,
             name: name.into(),
+            parent: None,
             values: BTreeMap::new(),
         }
+    }
+
+    fn under(mut self, parent: EntityRef) -> Self {
+        self.parent = Some(parent);
+        self
     }
 
     fn scalar_at(mut self, field: Field, value: f32) -> Self {
@@ -291,6 +307,7 @@ impl Snapshot {
             push(
                 &mut entities,
                 Fundamentals::new(EntityRef::House(house.id.clone()), house.name.clone())
+                    .under(EntityRef::Region(house.seat_region_id.clone()))
                     .scalar_at(Field::Prestige, house.prestige)
                     .scalar_at(Field::LivingMembers, members)
                     .scalar_at(Field::LivingRenown, renown),
@@ -334,6 +351,7 @@ impl Snapshot {
                     EntityRef::Settlement(settlement.id.clone()),
                     settlement.name.clone(),
                 )
+                .under(EntityRef::Region(settlement.region_id.clone()))
                 .scalar_at(Field::Population, settlement.population)
                 .scalar_at(Field::Prosperity, settlement.prosperity),
             );
@@ -351,6 +369,10 @@ impl Snapshot {
             push(
                 &mut entities,
                 Fundamentals::new(EntityRef::ResourceNode(node.id.clone()), node.name.clone())
+                    // A node's only outlet to the boards: it is not itself a
+                    // listing, so its news reaches the market through the
+                    // commodity it supplies.
+                    .under(EntityRef::Commodity(node.resource_type.label().to_owned()))
                     .status_at(Field::NodeStatus, node.status),
             );
         }
@@ -362,6 +384,7 @@ impl Snapshot {
                     EntityRef::Artifact(artifact.id.clone()),
                     artifact.name.clone(),
                 )
+                .under(EntityRef::Region(artifact.region_id.clone()))
                 .scalar_at(Field::Power, artifact.power as f32)
                 .scalar_at(Field::Instability, artifact.instability),
             );

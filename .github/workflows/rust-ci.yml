@@ -36,12 +36,8 @@ jobs:
           repository: Kalaith/macroquad-toolkit
           path: macroquad-toolkit
 
-      # LOCAL DEVIATION from the shared rust-ci.yml (see PROJECT_AGENTS.md).
-      # This game prices a projection of the Mytherra world and takes path
-      # dependencies on `../mytherra/mytherra-core` and `../mytherra/mytherra-protocol`,
-      # so a standalone checkout cannot compile without it. `sync-rust-ci-workflows.ps1`
-      # will overwrite this step — re-add it if that happens.
-      - name: Checkout mytherra (world source)
+      # world source: path deps on mytherra-core and mytherra-protocol (GDD 5.1)
+      - name: Checkout mytherra
         uses: actions/checkout@v4
         with:
           repository: Kalaith/mytherra_rust
@@ -84,9 +80,9 @@ jobs:
       - name: Verify project files
         run: |
           test -f Cargo.toml
-          test -f index.html
           test -d assets
           test -d ../macroquad-toolkit
+          test -d ../mytherra
           if [ ! -s catalog_thumbnail.png ]; then
             echo "::warning::catalog_thumbnail.png is missing or empty"
           fi
@@ -129,12 +125,8 @@ jobs:
           repository: Kalaith/macroquad-toolkit
           path: macroquad-toolkit
 
-      # LOCAL DEVIATION from the shared rust-ci.yml (see PROJECT_AGENTS.md).
-      # This game prices a projection of the Mytherra world and takes path
-      # dependencies on `../mytherra/mytherra-core` and `../mytherra/mytherra-protocol`,
-      # so a standalone checkout cannot compile without it. `sync-rust-ci-workflows.ps1`
-      # will overwrite this step — re-add it if that happens.
-      - name: Checkout mytherra (world source)
+      # world source: path deps on mytherra-core and mytherra-protocol (GDD 5.1)
+      - name: Checkout mytherra
         uses: actions/checkout@v4
         with:
           repository: Kalaith/mytherra_rust

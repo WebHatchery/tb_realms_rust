@@ -171,6 +171,14 @@ A capture runs in about a second of wall-clock, while the server ticks every ten
 captured frame will normally show **zero settlements observed**. That is correct, not a bug:
 the world's clock is not the exchange's to hurry.
 
+## CI needs two repos
+
+This game builds from a standalone checkout in CI, so the path dependencies on `../mytherra`
+cannot resolve unless that repo is fetched alongside it. That extra checkout is **declared in
+`rust_management/sync-rust-ci-workflows.ps1`'s `$ExtraCheckouts` map**, not hand-edited into
+`.github/workflows/rust-ci.yml` — the sync script overwrites project-local copies, so a
+hand-edit would survive exactly until the next sync. Change it there and re-sync.
+
 ## Known gaps
 
 - No root `catalog_thumbnail.png` — CI warns, and `publish.ps1` deploys it for the catalog card.

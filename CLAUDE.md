@@ -8,11 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `RustGames` catalog. You are a broker on the Tradeborn Exchange; every listing is a claim
 on an entity in a **read-only projection of the Mytherra world simulation** (`../mytherra/`).
 
-**Status: scaffold.** Everything in `src/` is still the unmodified
-`rust_management/template/` starter — tile grid, fog of war, an energy/points action loop.
-**None of it is the game.** `gdd.md` is the specification and the source of truth for what
-to build; read it before touching `src/`. The template's grid/fog scaffolding is explicitly
-slated for removal (GDD §10), so don't extend it — replace it.
+**Status: M0 complete — the world seam is live.** The template's grid/fog/energy starter is
+gone. `src/world.rs` is the seam, `src/world/live.rs` reads the shared Mytherra world over
+HTTP, and `src/world/delta.rs` turns consecutive world views into typed changes. There is no
+market yet: no instruments, no prices, no positions. `gdd.md` is the specification and the
+source of truth for everything still to build.
+
+**One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
+`mytherra-core`) the default and Live the last milestone (M6). This project went **Live
+first, by explicit decision** — the point is to trade the shared world every deity is
+nudging. The seam is built exactly as §11 specifies, so a Solo implementation can be added
+behind `WorldSource` later without touching anything downstream; it simply does not exist
+yet. Anything in the GDD that assumes Solo ships first is stale.
 
 Workspace-wide conventions (800-line file limit, no `mod.rs`, toolkit-first, commit style,
 publishing) live in `../rust_management/CLAUDE.md` and the four synced docs in this
@@ -20,17 +27,32 @@ directory. Everything below is what's specific to this project.
 
 ## Commands
 
+**The game needs a running world.** Start `mytherra-server` first, from `../mytherra`:
+
 ```powershell
-cargo run                                                  # native debug, solo mode
-cargo test                                                 # all tests
-cargo test legacy_save_migrates_to_current_shape           # one test by name
+cd ..\mytherra ; .\run-server.ps1     # needs XAMPP MySQL up; the DB is the save
+```
+
+Then, with the spectator secret in the environment (see *Configuration* below):
+
+```powershell
+$env:TB_REALMS_SPECTATOR_TOKEN = '<SPECTATOR_TOKEN from mytherra-server/.env>'
+
+cargo run                                                  # native debug, reads 127.0.0.1:8791
+cargo test                                                 # all tests (no server needed)
+cargo test a_house_losing_its_legend                       # one test by name
+cargo test -- --ignored --nocapture a_turning_of_the_world # end-to-end; waits out a server tick
 cargo fmt -- --check                                       # CI enforces
 cargo clippy --all-targets --all-features -- -D warnings   # CI treats warnings as errors
 cargo build --release --target wasm32-unknown-unknown      # WebGL
 
 .\publish.ps1                                              # build Windows + WebGL, deploy (the sanctioned validation path)
-.\scripts\capture_ui.ps1 -Scenes floor,listing,portfolio   # headless screenshots -> docs/verification/
+.\scripts\capture_ui.ps1 -Scenes boards                    # headless screenshot -> docs/verification/
 ```
+
+The two `#[ignore]`d tests in `src/world/live/tests.rs` are the only ones needing a server;
+everything else runs offline, including the delta tests, which build their fixtures from a
+real seeded `WorldState` projected through the real spectator `Standing`.
 
 Never set `RUSTFLAGS` by hand — wasm link flags live in the workspace `.cargo/config.toml`
 and an env var replaces rather than merges them, forking the whole wasm dependency cache.
@@ -42,33 +64,49 @@ CI (`.github/workflows/rust-ci.yml`) is the synced shared workflow; it checks ou
 
 `../mytherra/` is **its own Cargo workspace**, `exclude`d from the RustGames root workspace.
 `tb_realms` takes **cross-workspace path dependencies** on `../mytherra/mytherra-core` (the
-headless sim) and `../mytherra/mytherra-protocol` (the wire types). This was verified to
-resolve and build cleanly (GDD §5.1, 2026-07-26); the deps were then *reverted* because
-nothing uses them yet and the standards forbid unused dependencies. **Re-add them in M0 with
-the first line of code that needs them.**
-
-Both crates already depend on the same `macroquad-toolkit` path this game does, so Cargo
-unifies to one copy — no feature-unification problem.
+entity types) and `../mytherra/mytherra-protocol` (the wire types). Both crates already
+depend on the same `macroquad-toolkit` path this game does, so Cargo unifies to one copy.
 
 The single type everything downstream reads is `mytherra_protocol::WorldView` (year,
-tick_count, `revealed: BTreeSet<VisibilityScope>`, summary, era, plus `heroes`, `regions`,
-`settlements`, `resource_nodes`, `trade_routes`, `weather`, `wars`, `artifacts`, …).
+tick_count, `revealed: BTreeSet<VisibilityScope>`, summary, era, plus `heroes`, `houses`,
+`orders`, `regions`, `settlements`, `resource_nodes`, `trade_routes`, `artifacts`, …).
+
+### Two changes this game required in the mytherra repo
+
+The GDD claimed "v1 needs no change to Mytherra at all." That was wrong, and both fixes are
+already made and committed there (`A watcher at the window…`, `ac8067e`):
+
+1. **`houses` and `orders` are now on `WorldView`.** They existed on `WorldState` but
+   `project()` never put them on the wire, so house scrip and order charters — the two
+   highest-alpha classes — were unreachable. Both are revealed with `VisibilityScope::Heroes`.
+2. **The server has read-only spectator endpoints.** `POST /session` mints a level-1 deity,
+   which `tier_unlock_levels` puts at `Watcher`: heroes only, no regions/settlements/
+   resources/routes. A broker cannot climb out of that, because climbing means taking divine
+   actions. So `GET /spectate` and `GET /spectate/events?since=` serve
+   `spectator_standing()` — every scope, **no verbs and no betting markets**. The empty verb
+   set is what makes it safe, not the endpoint's name.
+
+If either is reverted upstream, this game loses most of its instrument taxonomy. The
+`#[ignore]`d `live_world_reads_the_shared_world…` test is what catches that.
 
 ### Rules that fall out of it
 
-- **`src/world.rs` is the most important file in the project.** One trait — *give me the
-  current `WorldView` and the events since cursor N* — with a Solo impl (embedded
-  `mytherra-core`, ticked in-process) and a Live impl (`quad-net` against `mytherra-server`).
-  Everything above it must be mode-agnostic. Get the seam wrong and the two modes fork the
-  codebase.
-- **Solo is the default and the balanced mode**, not a fallback. It is what ships in WebGL
-  and what CI tests. Live mode is milestone M6, deliberately last.
+- **`src/world.rs` is the most important file in the project.** One trait, `WorldSource`,
+  with `poll`/`view`/`cursor`/`resume_from`/`status`. Everything above it is mode-agnostic;
+  `game.rs` holds it as `Box<dyn WorldSource>` and does not know a wire exists.
+- **The seam is poll-shaped, not blocking, and that is deliberate.** A networked source
+  cannot answer "give me the world" synchronously without stalling the frame. An in-process
+  source satisfies a poll trivially by always being ready; retrofitting a blocking trait to
+  a network is what forks a codebase.
 - **Price the numeric deltas, never the prose.** Mytherra's `WorldEvent` is
   `{ year, kind, message }` with four coarse `kind` variants and free-text substance.
-  The price oracle diffs consecutive `WorldView`s for typed field changes (harvest fell,
-  a house lost its highest-renown member, a route's volume halved). The chronicle renders
-  *alongside* as flavour. Parsing chronicle strings for signal is the mistake this design
-  exists to prevent.
+  `delta.rs` diffs consecutive `WorldView`s for typed field changes; the chronicle rides
+  along in `WorldDelta::events` as the newspaper and **nothing that prices may read it**.
+- **Houses and orders are priced on their *living* membership**, which is not a field either
+  carries — it is reconstructed against the hero roster. `member_ids` is the whole lineage
+  including the dead, so its length only grows; a house that loses one of two members can
+  lose nine tenths of its renown, and `LivingMembers` vs `LivingRenown` is what tells those
+  apart.
 - **Strictly one-directional: this game never mutates Mytherra.** No `PlayerAction`, no
   nudges, no write path of any kind. It is a design pillar, not an omission.
 - Live mode HTTP must follow `mytherra/src/net.rs`'s poll-based `ServerClient` exactly —
@@ -95,23 +133,31 @@ Target layout (GDD §11) — `game.rs` state machine, `world.rs` + `world/{solo,
 - No textures, no camera, no sprites, no map. This game is deliberately UI-only — "you are
   looking at the world through paper." The chart is the art.
 
-## Data
+## Configuration
 
-`assets/data/*.json` is embedded at compile time via `include_str!` in `src/data.rs` and
-loaded through `load_embedded_json_labeled` / `DataRegistry`. `asset_packs.json` zips
-`assets/` into `assets.zip` at publish time (`delete_source: true`), loaded at runtime by
-`AssetManager::load_asset_pack`.
+`assets/data/game_config.json` is embedded at compile time via `include_str!` in
+`src/data.rs`. It carries the world source, not yet any market balance:
+
+- `server_url` — what a **debug native** build reads (`http://127.0.0.1:8791`).
+- `gateway_url` — what a **published** build reads instead
+  (`https://webhatchery.au/local_gateway/api/p/mytherra`). Mirrors mytherra's own field and
+  exists for the same reason: a browser on an https page cannot call a plain-http server, so
+  the WebGL build has no other route. `GameConfig::world_url()` picks between them.
+- `spectator_token` — **committed blank on purpose.** On native it is overridden by
+  `TB_REALMS_SPECTATOR_TOKEN`, so no secret is in git. A WebGL build has nowhere secret to
+  keep one and needs it filled in before publishing — at which point anyone can read it out
+  of the `.wasm`, which is exactly why it may only ever guard a *read-only* projection.
+  A blank token is a loud configuration error, never a silent 401.
+- `TB_REALMS_SERVER_URL` overrides the URL on native.
 
 Planned data files per GDD §6: `instruments.json` (fair-value rules per class),
-`impacts.json`, `licences.json`, `achievements.json`, `strings.json`, `world_seed.json`.
+`impacts.json`, `licences.json`, `achievements.json`, `strings.json`.
 
 **`impacts.json` is the balance surface of the entire game and must never become Rust
-constants** — it is where a designer tunes how hard a famine hits grain. The same applies to
-the fair-value and volatility rules in `instruments.json`.
+constants** — it is where a designer tunes how hard a famine hits grain. `Field::key()` is
+the vocabulary it will key on, and every key is asserted distinct.
 
-The current `game_config.json` fields (`starting_points`, `energy_per_second`,
-`world_width`/`height`) are template leftovers; the real schedule is starting capital, fees,
-settlement length, margin rules, and licence costs.
+`asset_packs.json` zips `assets/` into `assets.zip` at publish time (`delete_source: true`).
 
 ## Screenshot capture
 
@@ -121,19 +167,33 @@ writes a PNG, and exits (compiled out on wasm32). Right now there is one boot st
 `-Scenes` only picks the output filename — wiring real scenes (`floor`, `listing`,
 `portfolio`, …) via `begin_capture_scene` is part of building the screens.
 
-## Gaps in the scaffold
+A capture runs in about a second of wall-clock, while the server ticks every ten, so a
+captured frame will normally show **zero settlements observed**. That is correct, not a bug:
+the world's clock is not the exchange's to hurry.
 
-- Not a git repo yet (`git init` before the first commit; commit style is in
-  `rust_management/docs/COMMIT_STYLE.md`, with `mytherra` as the worked exemplar).
+## Known gaps
+
 - No root `catalog_thumbnail.png` — CI warns, and `publish.ps1` deploys it for the catalog card.
+- No market: no instruments, prices, orders, portfolio, or charts (M1–M3).
+- `LiveWorld` re-reads the entire `WorldView` every poll — around 900 heroes' worth of JSON
+  at present. Fine at a five-second cadence; if it stops being fine, the fix is a
+  delta endpoint on the server, not a cache here.
 - `AGENTS.md`, `CODE_STANDARDS.md`, `MACROQUAD_TOOLKIT.md`, and `GAME_DEVELOPMENT_GUIDE.md`
   are synced copies of `rust_management/docs/` — never hand-edit them. Project-specific
   guidance goes in this file, `README.md`, or `gdd.md`.
 - Don't add an `index.html`; the page is generated at publish time from `game_page.json` plus
   the shared `rust_management/web/` shell.
 
-## Milestone order (GDD §13)
+## Milestone order
 
-M0 the world seam → M1 instruments → M2 the market → M3 the floor UI → M4 chronicle/research
-→ M5 licences and eras → M6 Live mode → M7 polish. The game must be complete and shippable
-without a server ever running.
+GDD §13 is M0 seam → M1 instruments → M2 market → M3 floor UI → M4 chronicle/research →
+M5 licences and eras → M6 Live mode → M7 polish.
+
+**M0 is done, and M6 was folded into it** — Live is the mode that exists. What remains in
+GDD order: **M1 instruments** (derive listings from the `WorldView`, `instruments.json`,
+fair-value rules), then M2's pricing and orders. `market/` must not depend on macroquad, so
+the century-long backtest (GDD §14) can run headless.
+
+The GDD's "the game must be complete and shippable without a server ever running" no longer
+holds as written: without a server there is no world. Restoring it means writing the Solo
+`WorldSource`, which the seam is built for but which nobody has written.

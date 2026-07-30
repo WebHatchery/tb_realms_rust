@@ -36,6 +36,17 @@ jobs:
           repository: Kalaith/macroquad-toolkit
           path: macroquad-toolkit
 
+      # LOCAL DEVIATION from the shared rust-ci.yml (see PROJECT_AGENTS.md).
+      # This game prices a projection of the Mytherra world and takes path
+      # dependencies on `../mytherra/mytherra-core` and `../mytherra/mytherra-protocol`,
+      # so a standalone checkout cannot compile without it. `sync-rust-ci-workflows.ps1`
+      # will overwrite this step — re-add it if that happens.
+      - name: Checkout mytherra (world source)
+        uses: actions/checkout@v4
+        with:
+          repository: Kalaith/mytherra_rust
+          path: mytherra
+
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -117,6 +128,17 @@ jobs:
         with:
           repository: Kalaith/macroquad-toolkit
           path: macroquad-toolkit
+
+      # LOCAL DEVIATION from the shared rust-ci.yml (see PROJECT_AGENTS.md).
+      # This game prices a projection of the Mytherra world and takes path
+      # dependencies on `../mytherra/mytherra-core` and `../mytherra/mytherra-protocol`,
+      # so a standalone checkout cannot compile without it. `sync-rust-ci-workflows.ps1`
+      # will overwrite this step — re-add it if that happens.
+      - name: Checkout mytherra (world source)
+        uses: actions/checkout@v4
+        with:
+          repository: Kalaith/mytherra_rust
+          path: mytherra
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

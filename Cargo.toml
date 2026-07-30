@@ -8,3 +8,15 @@ macroquad = "0.4"
 macroquad-toolkit = { path = "../macroquad-toolkit" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# The world this exchange prices (GDD 5.1). Cross-workspace path dependencies:
+# `mytherra/` is its own Cargo workspace, excluded from the RustGames root, and
+# both crates resolve cleanly from here because they already share this game's
+# `macroquad-toolkit` path, so Cargo unifies to one copy. Strictly read-only —
+# `mytherra-protocol::PlayerAction` is deliberately never constructed here.
+mytherra-core = { path = "../mytherra/mytherra-core" }
+mytherra-protocol = { path = "../mytherra/mytherra-protocol" }
+# Cross-platform HTTP for the live world source, following `mytherra/src/net.rs`
+# exactly (GDD 10) rather than inventing a second pattern. quad-net rides
+# macroquad's own JS interop on wasm, so it coexists with the WebGL build; both
+# platforms share one poll-based, non-blocking API.
+quad-net = "0.1.2"

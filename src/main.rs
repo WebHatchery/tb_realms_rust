@@ -7,6 +7,7 @@ mod data;
 mod game;
 mod state;
 mod ui;
+mod world;
 
 use game::Game;
 

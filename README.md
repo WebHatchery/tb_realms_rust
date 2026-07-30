@@ -5,9 +5,10 @@ Exchange, holding positions in noble houses, knightly orders, regions, trade
 routes, and commodities — every one of them backed by a real entity in a living
 world you cannot touch.
 
-**Status:** scaffold. This is the `rust_management/template/` starter with the
-project's identity applied — no game code has been written yet. Read
-[`gdd.md`](gdd.md) first; it is the source of truth for what to build.
+**Status:** the world seam is live; the market is not built. The exchange
+connects to a running Mytherra world, reads it, and reports each turning as
+typed changes — but there are no instruments, prices, or positions yet. Read
+[`gdd.md`](gdd.md); it is the source of truth for what remains.
 
 Ported from `game_apps/tb_realms/` (React 19 + PHP/Slim + MySQL). See §0 of the
 GDD for the mechanic carry-over table and what was cut.
@@ -21,27 +22,45 @@ members; regions carry `prosperity`, `harvest`, `population`, `chaos`; trade
 routes carry `volume`; resource nodes have a type and a status. Those are the
 fundamentals the exchange prices.
 
-Two modes, and the offline one is not a fallback afterthought — it is the
-default:
+The GDD describes two modes. **Only Live is built**, by decision — the point is
+to trade the shared world every deity is actually nudging:
 
-| Mode | World source | Notes |
+| Mode | World source | State |
 | --- | --- | --- |
-| **Solo** (default) | An embedded `mytherra-core` world ticked locally | No server, no account, fully deterministic from a seed. Ships in the WebGL build. |
-| **Live** (opt-in) | `mytherra-server`'s `GET /view` + `GET /events?since=` | Trades the same shared world every deity is nudging. Requires a running server. |
+| **Live** | `mytherra-server`'s `GET /spectate` + `GET /spectate/events?since=` | Built. Trades the shared world; needs a running server. |
+| **Solo** | An embedded `mytherra-core` world ticked locally | Not written. The seam is built for it — `world.rs` is one trait with room for a second implementation. |
 
-Both read the **same** `mytherra-protocol::WorldView` type, so there is one price
-oracle, not two. See GDD §5.1 and §11 for the crate wiring, and §12 for what
-this deliberately does *not* do (Tradeborn Realms never mutates Mytherra).
+Live reads through the server's **read-only spectator endpoints**, which grant
+every visibility scope and no action verb whatsoever. Tradeborn Realms sees the
+whole world and can change none of it — see GDD §12 for why that is a design
+pillar rather than a limitation.
 
 ## Build and run
 
+The exchange needs a world to read, so start the authority server first:
+
 ```powershell
-cargo run                     # native debug build, solo mode
-cargo test                    # tests
+cd ..\mytherra ; .\run-server.ps1     # needs XAMPP MySQL; the DB is the save
+```
+
+Then, with the spectator secret from `mytherra-server/.env`:
+
+```powershell
+$env:TB_REALMS_SPECTATOR_TOKEN = '<SPECTATOR_TOKEN>'
+
+cargo run                     # native debug build
+cargo test                    # tests (no server needed)
+cargo test -- --ignored       # end-to-end against the running server
 cargo fmt -- --check          # CI enforces this
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --release --target wasm32-unknown-unknown   # WebGL
 ```
+
+A published build reads `gateway_url` instead, so the browser reaches a
+home-run server through one https origin. That build needs `spectator_token`
+filled into `assets/data/game_config.json` — it is committed blank so no secret
+lives in git, and it may only ever guard a read-only projection because anyone
+can read it out of the deployed `.wasm`.
 
 ## Publish
 
@@ -53,11 +72,13 @@ cargo build --release --target wasm32-unknown-unknown   # WebGL
 ## Screenshots
 
 ```powershell
-.\scripts\capture_ui.ps1 -Scenes floor,listing,portfolio
+.\scripts\capture_ui.ps1 -Scenes boards
 ```
 
 Drives the headless capture harness through the `TB_REALMS_CAPTURE_*` env vars
-wired in `src/main.rs`. Output lands in `docs/verification/`.
+wired in `src/main.rs`. Output lands in `docs/verification/`. A capture takes
+about a second while the server ticks every ten, so it will normally show no
+settlements observed — the world's clock is not the exchange's to hurry.
 
 ## Project docs
 

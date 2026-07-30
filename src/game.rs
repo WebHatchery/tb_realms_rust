@@ -1,72 +1,80 @@
-//! High-level game loop, state transitions, and toolkit integration.
+//! The game loop: owns the world source, the session, and the dispatcher that
+//! turns UI intents into state changes.
+//!
+//! The `Game` holds its world behind `Box<dyn WorldSource>` rather than a
+//! concrete type, so nothing here knows or cares that the world arrives over a
+//! wire (GDD 11). Swapping in an embedded, locally ticked world later is a
+//! change to `Game::new` and nothing else in this file.
 
 use crate::data::GameData;
 use crate::state::{migrate_save_value, GameSession, SaveData};
 use crate::ui::{self, UiAction, UiContext};
+use crate::world::live::{LiveWorld, SpectatorClient};
+use crate::world::{SourceStatus, WorldSource};
 use macroquad::prelude::*;
-use macroquad_toolkit::assets::AssetManager;
-use macroquad_toolkit::camera::{Camera2D, Camera2DConfig, CameraBounds};
 use macroquad_toolkit::events::EventBus;
 use macroquad_toolkit::notifications::{
     NotificationAnchor, NotificationManager, NotificationRenderConfig,
 };
 use macroquad_toolkit::persistence::{
-    delete_slot, get_save_slots, load_from_slot_with_migration, save_to_slot_with_version,
-    slot_exists,
+    load_from_slot_with_migration, save_to_slot_with_version, slot_exists,
 };
-use macroquad_toolkit::prelude::{begin_virtual_ui_frame, dark, end_virtual_ui_frame, InputState};
+use macroquad_toolkit::prelude::{begin_virtual_ui_frame, dark, end_virtual_ui_frame};
 
 pub struct Game {
     data: GameData,
     session: GameSession,
-    assets: AssetManager,
+    world: Box<dyn WorldSource>,
+    /// The chronicle cursor, mirrored here so it can be saved. The source owns
+    /// the authoritative one; this follows it.
+    cursor: u64,
     notifications: NotificationManager,
-    camera: Camera2D,
     events: EventBus<UiAction>,
     save_exists: bool,
-    save_slots: Vec<String>,
+    /// Set when the exchange could not be opened at all — a missing spectator
+    /// token, say. Rendered as a dead wire rather than silently polling nothing.
+    fatal: Option<SourceStatus>,
 }
 
 impl Game {
     pub async fn new() -> Self {
         let data = GameData::load().unwrap_or_else(|err| {
-            panic!("Template embedded data failed to load: {}", err);
+            panic!("Tradeborn Realms embedded data failed to load: {err}");
         });
 
-        let mut assets = AssetManager::new();
-        let placeholder = Image::gen_image_color(16, 16, Color::new(0.75, 0.2, 0.8, 1.0));
-        assets.set_placeholder_texture_direct(Texture2D::from_image(&placeholder));
-        let _ = assets.load_asset_pack("assets.zip").await;
-        let loaded_assets = assets.load_texture_configs(&data.texture_manifest).await;
-
         let mut notifications = NotificationManager::new();
-        notifications.info(format!(
-            "Template booted with macroquad-toolkit systems; {} manifest textures loaded",
-            loaded_assets
-        ));
 
-        let session = GameSession::new(&data.config);
-        let camera = Camera2D::with_config(
-            vec2(0.0, 0.0),
-            1.0,
-            Camera2DConfig {
-                drag_button: Some(MouseButton::Right),
-                min_zoom: 0.75,
-                max_zoom: 1.75,
-                bounds: Some(CameraBounds::new(vec2(-240.0, -160.0), vec2(240.0, 160.0))),
-                ..Default::default()
-            },
-        );
+        // A missing token is a configuration failure, not a network one, and
+        // saying so plainly here saves a long hunt through 401s later.
+        let (world, fatal): (Box<dyn WorldSource>, Option<SourceStatus>) =
+            match data.config.spectator_token() {
+                Ok(token) => {
+                    let client = SpectatorClient::new(data.config.world_url(), token);
+                    notifications.info(format!("Reading the world at {}", data.config.world_url()));
+                    (
+                        Box::new(LiveWorld::connect(
+                            client,
+                            data.config.view_poll_seconds,
+                            data.config.request_timeout_seconds,
+                        )),
+                        None,
+                    )
+                }
+                Err(err) => {
+                    notifications.danger(err.clone());
+                    (Box::new(NoWorld), Some(SourceStatus::Failed(err)))
+                }
+            };
 
         let mut game = Self {
             data,
-            session,
-            assets,
+            session: GameSession::new(),
+            world,
+            cursor: 0,
             notifications,
-            camera,
             events: EventBus::new(),
             save_exists: false,
-            save_slots: Vec::new(),
+            fatal,
         };
         game.refresh_save_state();
         game
@@ -74,16 +82,36 @@ impl Game {
 
     pub fn update(&mut self, dt: f32) {
         self.notifications.update(dt);
-        self.session.update_energy(&self.data.config, dt);
 
-        let input = InputState::capture();
-        if input.escape_pressed {
-            self.events.push(UiAction::NewGame);
-        }
-        if input.space_pressed {
-            if let Some((id, _)) = self.data.actions.iter().next() {
-                self.events.push(UiAction::RunAction(id.clone()));
+        // The world turns on its own schedule; the exchange only reads it.
+        if let Some(delta) = self.world.poll(dt) {
+            self.session.record(&delta);
+            // Follow the source's cursor so a save records how far the exchange
+            // has actually read.
+            self.cursor = self.world.cursor();
+
+            if !delta.listed.is_empty() || !delta.delisted.is_empty() {
+                self.notifications.info(format!(
+                    "Year {}: {} listed, {} delisted",
+                    delta.to_year,
+                    delta.listed.len(),
+                    delta.delisted.len()
+                ));
+            } else if delta.is_empty() {
+                self.notifications
+                    .info(format!("Year {}: a quiet year", delta.to_year));
+            } else {
+                self.notifications.info(format!(
+                    "Year {}: {} moves across {}y",
+                    delta.to_year,
+                    delta.moves.len(),
+                    delta.years()
+                ));
             }
+        }
+
+        if is_key_pressed(KeyCode::R) {
+            self.events.push(UiAction::ReadNow);
         }
         if is_key_pressed(KeyCode::S) {
             self.events.push(UiAction::Save);
@@ -91,11 +119,6 @@ impl Game {
         if is_key_pressed(KeyCode::L) {
             self.events.push(UiAction::Load);
         }
-        if let Some((dx, dy)) = ui::tile_move_from_keys() {
-            self.session.move_selection(dx, dy);
-        }
-
-        self.camera.update(dt, false);
 
         let actions: Vec<UiAction> = self.events.drain().collect();
         for action in actions {
@@ -110,11 +133,9 @@ impl Game {
         let ctx = UiContext {
             data: &self.data,
             session: &self.session,
+            status: self.fatal.as_ref().unwrap_or_else(|| self.world.status()),
+            view: self.world.view(),
             save_exists: self.save_exists,
-            save_slots: &self.save_slots,
-            loaded_assets: self.assets.len(),
-            camera_target: self.camera.target,
-            camera_zoom: self.camera.zoom,
             ui: &virtual_ui,
         };
 
@@ -134,39 +155,17 @@ impl Game {
 
     fn apply_action(&mut self, action: UiAction) {
         match action {
-            UiAction::NewGame => {
-                self.session = GameSession::new(&self.data.config);
-                self.notifications.info("Started a fresh template session");
-            }
+            // The world turns on the server's clock, so "read now" can only
+            // hurry the *reading*, never the world. There is deliberately no
+            // way from here to make the world advance.
+            UiAction::ReadNow => self.notifications.info("Reading on the next poll"),
             UiAction::Save => self.save_game(),
             UiAction::Load => self.load_game(),
-            UiAction::DeleteSave => self.delete_save(),
-            UiAction::RunAction(id) => self.run_data_action(&id),
-            UiAction::SelectTile(tile) => {
-                self.session.select_tile(tile);
-                self.notifications
-                    .info(format!("Selected tile {}, {}", tile.x, tile.y));
-            }
-        }
-    }
-
-    fn run_data_action(&mut self, action_id: &str) {
-        let Some(action) = self.data.actions.get(action_id) else {
-            self.notifications
-                .warning(format!("Unknown action: {}", action_id));
-            return;
-        };
-
-        if self.session.apply_action(action) {
-            self.notifications
-                .success(format!("{} complete", action.name));
-        } else {
-            self.notifications.warning("Not enough energy");
         }
     }
 
     fn save_game(&mut self) {
-        let save = self.session.to_save(&self.data.config.version);
+        let save = self.session.to_save(&self.data.config.version, self.cursor);
         match save_to_slot_with_version(
             &self.data.config.game_name,
             &self.data.config.save_slot,
@@ -174,10 +173,10 @@ impl Game {
             &self.data.config.version,
         ) {
             Ok(()) => {
-                self.notifications.success("Saved with toolkit save slots");
+                self.notifications.success("Ledger saved");
                 self.refresh_save_state();
             }
-            Err(err) => self.notifications.danger(format!("Save failed: {}", err)),
+            Err(err) => self.notifications.danger(format!("Save failed: {err}")),
         }
     }
 
@@ -191,27 +190,46 @@ impl Game {
 
         match loaded {
             Ok(save) => {
-                self.session = GameSession::from_save(save);
-                self.notifications
-                    .success("Loaded save with migration support");
+                self.cursor = save.cursor;
+                // Tell the world source too, or the next read would re-serve
+                // every chronicle line the exchange had already read.
+                self.world.resume_from(save.cursor);
+                self.session = GameSession::from_save(&save);
+                self.notifications.success("Ledger loaded");
                 self.refresh_save_state();
             }
-            Err(err) => self.notifications.warning(format!("Load failed: {}", err)),
-        }
-    }
-
-    fn delete_save(&mut self) {
-        match delete_slot(&self.data.config.game_name, &self.data.config.save_slot) {
-            Ok(()) => {
-                self.notifications.info("Deleted template save slot");
-                self.refresh_save_state();
-            }
-            Err(err) => self.notifications.danger(format!("Delete failed: {}", err)),
+            Err(err) => self.notifications.warning(format!("Load failed: {err}")),
         }
     }
 
     fn refresh_save_state(&mut self) {
         self.save_exists = slot_exists(&self.data.config.game_name, &self.data.config.save_slot);
-        self.save_slots = get_save_slots(&self.data.config.game_name);
+    }
+}
+
+/// The world source used when the exchange could not be opened at all. It
+/// exists so the rest of the game has no "maybe there is no world" branch to
+/// carry — the boards render, the banner explains, and nothing else changes.
+struct NoWorld;
+
+impl WorldSource for NoWorld {
+    fn poll(&mut self, _dt: f32) -> Option<crate::world::WorldDelta> {
+        None
+    }
+
+    fn view(&self) -> Option<&mytherra_protocol::WorldView> {
+        None
+    }
+
+    fn cursor(&self) -> u64 {
+        0
+    }
+
+    fn resume_from(&mut self, _cursor: u64) {}
+
+    fn status(&self) -> &SourceStatus {
+        // A source that was never opened is not "connecting" — it is down, and
+        // the reason is on the banner the caller supplies.
+        &SourceStatus::Connecting
     }
 }

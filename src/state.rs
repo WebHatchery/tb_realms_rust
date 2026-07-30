@@ -1,212 +1,288 @@
-//! Runtime state, save data, and save migration helpers.
+//! The exchange's own state: what it has watched the world do, and what of
+//! that survives a restart.
+//!
+//! There are no positions here yet — the market arrives in M2 (GDD 13). What
+//! exists now is the settlement log: one record per turning of the world, which
+//! is what the digest and records screens are built from, and the chronicle
+//! cursor, so a reopened exchange resumes reading where it stopped rather than
+//! re-reading a century of prose.
 
-use crate::data::{ActionDef, GameConfig};
-use macroquad_toolkit::grid::{
-    calculate_visible_tiles, update_flat_fog_states, FlatGrid, FogState, TilePos,
-};
+use crate::data::GameConfig;
+use crate::world::delta::{Change, WorldDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
 
+/// How many settlements the in-memory log keeps. The exchange runs for
+/// centuries, so this is a display buffer, not the archive; the archive is the
+/// records screen's job once there are trades to record (GDD 9).
+const LOG_CAPACITY: usize = 64;
+
+/// One turning of the world, as the exchange saw it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayerState {
-    pub points: i64,
-    pub energy: f32,
-    pub selected_tile: TilePos,
-    pub turn: u32,
+pub struct SettlementRecord {
+    pub year: u32,
+    pub tick: u64,
+    /// World years covered — more than one if the exchange was off the wire.
+    pub years: u32,
+    pub moves: usize,
+    pub listed: usize,
+    pub delisted: usize,
+    /// A few of the instruments that appeared or vanished, named. This is the
+    /// content no authored market can produce — a house whose blood ran out, a
+    /// settlement razed — so the digest says which, not merely how many.
+    pub notable: Vec<String>,
+    /// The fields that moved furthest, in the vocabulary the balance tables
+    /// will use. The embryo of the price-move decomposition (GDD 5.4): a
+    /// player must always be able to ask why, and get an answer.
+    pub top_moves: Vec<String>,
+    /// The chronicle's own words for this turning, if it had any: the newspaper
+    /// beside the numbers (GDD 5.5). Never read by anything that prices.
+    pub headline: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorldState {
-    pub fog: FlatGrid<FogState>,
-    pub reachable: HashSet<TilePos>,
+/// How many appearances/disappearances a single record names before it stops.
+const NOTABLE_LIMIT: usize = 3;
+
+/// A discrete change in words — the direction lives in the labels rather than
+/// in a magnitude, so it has to be spelled out.
+fn describe(change: &Change) -> String {
+    match change {
+        Change::Scalar { before, after } => format!("{before:.1} → {after:.1}"),
+        Change::Flag { after: true, .. } => "set".to_owned(),
+        Change::Flag { after: false, .. } => "lifted".to_owned(),
+        Change::Status { before, after } => format!("{before} → {after}"),
+    }
 }
 
+impl SettlementRecord {
+    fn from_delta(delta: &WorldDelta) -> Self {
+        // Delistings lead: a position in something that no longer exists is the
+        // more urgent news than a new listing to consider.
+        let notable = delta
+            .delisted
+            .iter()
+            .map(|entity| format!("{} {} delisted", entity.class(), entity.id()))
+            .chain(
+                delta
+                    .listed
+                    .iter()
+                    .map(|entity| format!("{} {} listed", entity.class(), entity.id())),
+            )
+            .take(NOTABLE_LIMIT)
+            .collect();
+
+        let top_moves = delta
+            .most_moved(NOTABLE_LIMIT)
+            .into_iter()
+            .map(|moved| {
+                let magnitude = moved.change.magnitude();
+                if magnitude == 0.0 {
+                    // A flag or status change: the direction is in the labels,
+                    // not in a number, so print the labels.
+                    format!("{} {}", moved.entity.id(), describe(&moved.change))
+                } else {
+                    format!(
+                        "{} {} {:+.1}",
+                        moved.entity.id(),
+                        moved.field.key(),
+                        magnitude
+                    )
+                }
+            })
+            .collect();
+
+        Self {
+            year: delta.to_year,
+            tick: delta.to_tick,
+            years: delta.years(),
+            moves: delta.moves.len(),
+            listed: delta.listed.len(),
+            delisted: delta.delisted.len(),
+            notable,
+            top_moves,
+            headline: delta.events.last().map(|event| event.message.clone()),
+        }
+    }
+}
+
+/// What survives a restart. Deliberately small: everything else in the session
+/// is re-derived from the world on the next read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveData {
     pub version: String,
-    pub player: PlayerState,
-    pub world: WorldState,
+    /// The chronicle cursor last acknowledged.
+    pub cursor: u64,
+    /// The world tick the exchange had last seen.
+    pub last_tick: u64,
 }
 
-#[derive(Debug, Clone)]
+/// The live session.
+#[derive(Debug, Clone, Default)]
 pub struct GameSession {
-    pub player: PlayerState,
-    pub world: WorldState,
+    /// Settlements observed, newest first.
+    settlements: Vec<SettlementRecord>,
+    /// The world tick last seen, or zero before the first world arrives.
+    pub last_tick: u64,
+    /// Total settlements observed this session, which outlives the bounded log.
+    pub observed: u64,
 }
 
 impl GameSession {
-    pub fn new(config: &GameConfig) -> Self {
-        let start = TilePos::new(
-            (config.world_width / 2) as i32,
-            (config.world_height / 2) as i32,
-        );
-        let mut session = Self {
-            player: PlayerState {
-                points: config.starting_points,
-                energy: config.starting_energy,
-                selected_tile: start,
-                turn: 1,
-            },
-            world: WorldState {
-                fog: FlatGrid::new(config.world_width, config.world_height, FogState::Hidden),
-                reachable: HashSet::new(),
-            },
-        };
-        session.refresh_visibility();
-        session
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn from_save(save: SaveData) -> Self {
-        Self {
-            player: save.player,
-            world: save.world,
-        }
+    /// Record a turning of the world.
+    pub fn record(&mut self, delta: &WorldDelta) {
+        self.last_tick = delta.to_tick;
+        self.observed += 1;
+        self.settlements
+            .insert(0, SettlementRecord::from_delta(delta));
+        self.settlements.truncate(LOG_CAPACITY);
     }
 
-    pub fn to_save(&self, version: &str) -> SaveData {
+    /// Settlements observed, newest first.
+    pub fn settlements(&self) -> &[SettlementRecord] {
+        &self.settlements
+    }
+
+    pub fn to_save(&self, version: &str, cursor: u64) -> SaveData {
         SaveData {
             version: version.to_owned(),
-            player: self.player.clone(),
-            world: self.world.clone(),
+            cursor,
+            last_tick: self.last_tick,
         }
     }
 
-    pub fn update_energy(&mut self, config: &GameConfig, dt: f32) {
-        self.player.energy =
-            (self.player.energy + config.energy_per_second * dt).min(config.max_energy);
-    }
-
-    pub fn can_run_action(&self, action: &ActionDef) -> bool {
-        self.player.energy >= action.energy_cost
-    }
-
-    pub fn apply_action(&mut self, action: &ActionDef) -> bool {
-        if !self.can_run_action(action) {
-            return false;
+    pub fn from_save(save: &SaveData) -> Self {
+        Self {
+            settlements: Vec::new(),
+            last_tick: save.last_tick,
+            observed: 0,
         }
-
-        self.player.energy -= action.energy_cost;
-        self.player.points += action.points_reward;
-        self.player.turn += 1;
-        self.refresh_visibility();
-        true
-    }
-
-    pub fn move_selection(&mut self, dx: i32, dy: i32) {
-        let next = TilePos::new(
-            self.player.selected_tile.x + dx,
-            self.player.selected_tile.y + dy,
-        );
-        self.select_tile(next);
-    }
-
-    pub fn select_tile(&mut self, next: TilePos) {
-        if self.world.fog.is_valid(next) {
-            self.player.selected_tile = next;
-            self.refresh_visibility();
-        }
-    }
-
-    fn refresh_visibility(&mut self) {
-        let visible = calculate_visible_tiles(self.player.selected_tile, 4, |_| false);
-        update_flat_fog_states(&mut self.world.fog, &visible);
-        self.world.reachable =
-            self.world
-                .fog
-                .flood_fill(self.player.selected_tile, false, |_, fog| {
-                    *fog != FogState::Hidden
-                });
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct LegacySave {
-    points: Option<i64>,
-    energy: Option<f32>,
-    turn: Option<u32>,
-}
-
+/// Bring a save of any earlier shape up to the current one.
+///
+/// The exchange's save is small and re-derivable, so an unreadable one is not
+/// worth failing over: an unrecognised payload starts a fresh session rather
+/// than refusing to open, and the next read of the world repopulates it.
 pub fn migrate_save_value(
-    detected_version: Option<String>,
+    _detected_version: Option<String>,
     value: Value,
     config: &GameConfig,
 ) -> Result<SaveData, String> {
     let payload = value.get("data").cloned().unwrap_or(value);
 
-    if let Ok(mut current) = serde_json::from_value::<SaveData>(payload.clone()) {
+    if let Ok(mut current) = serde_json::from_value::<SaveData>(payload) {
         current.version = config.version.clone();
         return Ok(current);
     }
 
-    let legacy: LegacySave = serde_json::from_value(payload)
-        .map_err(|err| format!("Unsupported save format {:?}: {}", detected_version, err))?;
-
-    let mut session = GameSession::new(config);
-    if let Some(points) = legacy.points {
-        session.player.points = points;
-    }
-    if let Some(energy) = legacy.energy {
-        session.player.energy = energy.clamp(0.0, config.max_energy);
-    }
-    if let Some(turn) = legacy.turn {
-        session.player.turn = turn.max(1);
-    }
-
-    Ok(session.to_save(&config.version))
+    Ok(SaveData {
+        version: config.version.clone(),
+        cursor: 0,
+        last_tick: 0,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::delta::WorldDelta;
 
-    fn test_config() -> GameConfig {
-        GameConfig {
-            game_name: "tb_realms".to_owned(),
-            display_name: "Tradeborn Realms".to_owned(),
-            save_slot: "autosave".to_owned(),
-            version: "1.0.0".to_owned(),
-            starting_points: 10,
-            starting_energy: 5.0,
-            max_energy: 10.0,
-            energy_per_second: 1.0,
-            world_width: 8,
-            world_height: 8,
+    fn delta(year: u32, tick: u64) -> WorldDelta {
+        WorldDelta {
+            to_tick: tick,
+            from_year: year.saturating_sub(1),
+            to_year: year,
+            ..Default::default()
         }
     }
 
     #[test]
-    fn action_spends_energy_and_rewards_points() {
-        let config = test_config();
-        let action = ActionDef {
-            id: "test".to_owned(),
-            name: "Test".to_owned(),
-            description: "Test action".to_owned(),
-            energy_cost: 3.0,
-            points_reward: 7,
-        };
-        let mut session = GameSession::new(&config);
+    fn settlements_are_logged_newest_first_and_bounded() {
+        let mut session = GameSession::new();
+        for year in 1..=(LOG_CAPACITY as u32 + 10) {
+            session.record(&delta(year, year as u64));
+        }
 
-        assert!(session.apply_action(&action));
-        assert_eq!(session.player.points, 17);
-        assert_eq!(session.player.turn, 2);
-        assert!((session.player.energy - 2.0).abs() < f32::EPSILON);
+        assert_eq!(
+            session.settlements().len(),
+            LOG_CAPACITY,
+            "the log is bounded"
+        );
+        assert_eq!(
+            session.settlements()[0].year,
+            LOG_CAPACITY as u32 + 10,
+            "newest first"
+        );
+        // The count outlives the buffer, so the digest can say how long the
+        // exchange has been open even after the log has rolled.
+        assert_eq!(session.observed, LOG_CAPACITY as u64 + 10);
+        assert_eq!(session.last_tick, LOG_CAPACITY as u64 + 10);
     }
 
     #[test]
-    fn legacy_save_migrates_to_current_shape() {
-        let config = test_config();
+    fn a_save_round_trips_the_cursor_and_tick() {
+        let mut session = GameSession::new();
+        session.record(&delta(341, 17));
+
+        let save = session.to_save("0.1.0", 4_212);
+        let resumed = GameSession::from_save(&save);
+
+        assert_eq!(resumed.last_tick, 17);
+        // The log itself is not persisted — it is a display buffer, and the
+        // world repopulates it on the next read.
+        assert!(resumed.settlements().is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_save_starts_fresh_rather_than_failing() {
+        let config = GameConfig {
+            game_name: "tb_realms".to_owned(),
+            display_name: "Tradeborn Realms".to_owned(),
+            save_slot: "autosave".to_owned(),
+            version: "0.2.0".to_owned(),
+            server_url: "http://127.0.0.1:8791".to_owned(),
+            gateway_url: String::new(),
+            spectator_token: String::new(),
+            view_poll_seconds: 5.0,
+            request_timeout_seconds: 15.0,
+        };
+        let value = serde_json::json!({ "nonsense": true });
+
+        let migrated = migrate_save_value(Some("0.0.1".to_owned()), value, &config).unwrap();
+
+        assert_eq!(migrated.version, "0.2.0");
+        assert_eq!(migrated.cursor, 0);
+        assert_eq!(migrated.last_tick, 0);
+    }
+
+    #[test]
+    fn a_current_save_survives_migration_with_its_cursor_intact() {
+        let config = GameConfig {
+            game_name: "tb_realms".to_owned(),
+            display_name: "Tradeborn Realms".to_owned(),
+            save_slot: "autosave".to_owned(),
+            version: "0.2.0".to_owned(),
+            server_url: "http://127.0.0.1:8791".to_owned(),
+            gateway_url: String::new(),
+            spectator_token: String::new(),
+            view_poll_seconds: 5.0,
+            request_timeout_seconds: 15.0,
+        };
         let value = serde_json::json!({
-            "points": 42,
-            "energy": 99.0,
-            "turn": 3
+            "version": "0.1.0",
+            "cursor": 918,
+            "last_tick": 16_290
         });
 
         let migrated = migrate_save_value(Some("0.1.0".to_owned()), value, &config).unwrap();
 
-        assert_eq!(migrated.version, "1.0.0");
-        assert_eq!(migrated.player.points, 42);
-        assert_eq!(migrated.player.energy, 10.0);
-        assert_eq!(migrated.player.turn, 3);
+        assert_eq!(migrated.version, "0.2.0", "stamped to the current version");
+        assert_eq!(migrated.cursor, 918, "the cursor is not lost");
+        assert_eq!(migrated.last_tick, 16_290);
     }
 }

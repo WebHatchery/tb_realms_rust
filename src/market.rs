@@ -14,6 +14,7 @@
 
 pub mod impact;
 pub mod instruments;
+pub mod orders;
 pub mod pricing;
 
 pub use impact::ImpactTable;

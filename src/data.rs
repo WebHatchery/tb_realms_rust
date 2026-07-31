@@ -1,5 +1,6 @@
 //! Embedded game data and the exchange's configuration.
 
+use crate::market::orders::OrderConfig;
 use crate::market::{ImpactTable, InstrumentRules, MarketConfig};
 use macroquad_toolkit::data_loader::load_embedded_json_labeled;
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,8 @@ pub struct GameConfig {
     pub request_timeout_seconds: f32,
     /// How prices form (GDD 5.4).
     pub market: MarketConfig,
+    /// What an order costs (GDD 5.5, open question 3).
+    pub orders: OrderConfig,
 }
 
 impl GameConfig {

@@ -9,6 +9,7 @@
 use crate::data::GameData;
 use crate::market::{Board, Instrument};
 use crate::world::delta::diff;
+use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
 use macroquad_toolkit::rng::SeededRng;
 use mytherra_core::data::ResourceStatus;
@@ -307,4 +308,123 @@ fn the_live_world_moves_prices_when_it_turns() {
             listing.symbol
         );
     }
+}
+
+/// A scripted broker: buy the cheapest paper on the board, sell anything that
+/// has run well past what the world says it is worth.
+///
+/// Deliberately naive. The point is not that it is a good strategy — it is that
+/// a strategy trading through the real execution path for a century produces an
+/// equity curve inside designed bounds. A balance change that made trading free,
+/// or made every position a loser, moves this.
+fn backtest(years: u32, world_seed: u64) -> Vec<f32> {
+    use crate::market::orders::Side;
+    use crate::state::Portfolio;
+
+    let data = GameData::load().expect("the exchange's data loads");
+    let (market, orders) = (&data.config.market, &data.config.orders);
+    let mut world_rng = SeededRng::new(world_seed);
+    let mut market_rng = SeededRng::new(market.seed);
+
+    let mut view = base();
+    let mut board = Board::new();
+    let mut ledger = Portfolio::new(orders);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+
+    let mut flow: BTreeMap<EntityRef, f32> = BTreeMap::new();
+    let mut curve = Vec::new();
+
+    for year in 0..years {
+        let next = turn(&view, &mut world_rng);
+        let snapshot = Snapshot::read(&next);
+        let delta = diff(&view, &next);
+        board.refresh(&snapshot, &data.instruments, market);
+        board.settle(
+            &data.impacts.shocks(&delta, &snapshot),
+            &flow,
+            market,
+            &mut market_rng,
+        );
+        for mark in flow.values_mut() {
+            *mark *= orders.flow_decay;
+        }
+        ledger.collect_income(&board);
+        ledger.write_off_delisted(&board);
+
+        // Sell what has run past fair value.
+        let dear: Vec<Instrument> = ledger
+            .positions()
+            .filter_map(|position| board.get(&position.entity))
+            .filter(|listing| listing.premium() > 0.20)
+            .cloned()
+            .collect();
+        for listing in dear {
+            let held = ledger.units_of(&listing.entity);
+            if let Ok(fill) = ledger.execute(&listing, Side::Sell, held, next.year, orders) {
+                *flow.entry(listing.entity.clone()).or_default() += fill.flow;
+            }
+        }
+
+        // Buy the cheapest thing the ledger can afford a round lot of.
+        let mut cheap: Vec<&Instrument> = board
+            .listings()
+            .filter(|listing| listing.premium() < -0.10)
+            .collect();
+        cheap.sort_by(|a, b| a.premium().total_cmp(&b.premium()));
+        if let Some(listing) = cheap.first().map(|l| (*l).clone()) {
+            let affordable = (ledger.cash * 0.25 / listing.price.max(0.01)) as i64;
+            if affordable > 0 {
+                if let Ok(fill) = ledger.execute(&listing, Side::Buy, affordable, next.year, orders)
+                {
+                    *flow.entry(listing.entity.clone()).or_default() += fill.flow;
+                }
+            }
+        }
+
+        curve.push(ledger.equity(&board));
+        view = next;
+        let _ = year;
+    }
+    curve
+}
+
+#[test]
+fn a_century_can_be_traded_headlessly_and_the_equity_curve_is_plausible() {
+    // GDD 14's headline test, and M2's "done when". `market/` is macroquad-free
+    // precisely so this can run in CI.
+    let opening = GameData::load().unwrap().config.orders.starting_capital;
+    let curve = backtest(100, 31_337);
+
+    assert_eq!(curve.len(), 100);
+    for (year, equity) in curve.iter().enumerate() {
+        assert!(
+            equity.is_finite() && *equity > 0.0,
+            "year {year}: equity is {equity}"
+        );
+        // Bounds, not balance: a broker who cannot lose everything and cannot
+        // multiply their capital a hundredfold in a century is inside a market
+        // that behaves like one. Either bound breaking means the price model or
+        // the fee model has stopped biting.
+        assert!(
+            *equity < opening * 100.0,
+            "year {year}: equity ran away to {equity}"
+        );
+    }
+
+    let ended = *curve.last().unwrap();
+    println!("backtest: opened {opening:.0}, ended {ended:.0}");
+    // The curve must actually move — a strategy that never traded would sit
+    // flat at the opening capital and pass every bound above.
+    assert!(
+        (ended - opening).abs() > opening * 0.01,
+        "the scripted broker did nothing: {ended} against {opening}"
+    );
+}
+
+#[test]
+fn the_same_seeds_replay_the_same_traded_century() {
+    // Determinism through the execution path too, not just the price path:
+    // same world, same market stream, same orders, same equity curve.
+    assert_eq!(backtest(50, 2024), backtest(50, 2024));
+    assert_ne!(backtest(50, 2024), backtest(50, 2025));
 }

@@ -34,7 +34,12 @@ use std::fmt::Debug;
 /// kind (you trade grain, not a named field), and the individual
 /// [`EntityRef::ResourceNode`] beneath it is watched but never listed — a node
 /// is a fact the commodity is priced on, not a claim anyone can hold.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Serialized because a saved position names the entity it is a claim on —
+/// the one piece of world identity the exchange must remember across a restart,
+/// since a position, unlike everything else here, cannot be re-derived.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum EntityRef {
     House(String),
     Order(String),

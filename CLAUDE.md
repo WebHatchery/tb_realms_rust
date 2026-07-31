@@ -8,15 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `RustGames` catalog. You are a broker on the Tradeborn Exchange; every listing is a claim
 on an entity in a **read-only projection of the Mytherra world simulation** (`../mytherra/`).
 
-**Status: M1 complete; M2 half done — prices form and move.** The template's grid/fog/energy
-starter is gone. `src/world.rs` is the seam, `src/world/live.rs` reads the shared Mytherra
-world over HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the exchange's one
-vocabulary, and `src/world/delta.rs` diffs two such readings into typed changes.
-`src/market/instruments.rs` turns a reading into a `Board` of listings with fair values;
-`src/market/impact.rs` turns typed deltas into shocks; `src/market/pricing.rs` moves each
-price by drift + shock + noise + flow and keeps the decomposition. What remains of M2 is the
-**order side**: no orders, no positions, no P&L, so the `flow` term is always zero.
-`gdd.md` is the specification and the source of truth.
+**Status: M0-M2 complete — the exchange trades.** The template's grid/fog/energy starter is
+gone. `src/world.rs` is the seam, `src/world/live.rs` reads the shared Mytherra world over
+HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the exchange's one vocabulary, and
+`src/world/delta.rs` diffs two such readings into typed changes. `src/market/instruments.rs`
+turns a reading into a `Board` of listings with fair values; `src/market/impact.rs` turns
+typed deltas into shocks; `src/market/pricing.rs` moves each price by drift + shock + noise +
+flow; `src/market/orders.rs` prices an order including its own market impact; and
+`src/state/portfolio.rs` is the ledger. A century can be traded headlessly. What remains is
+**M3, the floor**: charts via `macroquad_toolkit::series`, a listing screen, and the research
+browser. `gdd.md` is the specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -51,7 +52,7 @@ cargo clippy --all-targets --all-features -- -D warnings   # CI treats warnings 
 cargo build --release --target wasm32-unknown-unknown      # WebGL
 
 .\publish.ps1                                              # build Windows + WebGL, deploy (the sanctioned validation path)
-.\scripts\capture_ui.ps1 -Scenes boards                    # headless screenshot -> docs/verification/
+.\scripts\capture_ui.ps1 -Scenes boards,trading            # headless screenshots -> docs/verification/
 ```
 
 The two `#[ignore]`d tests in `src/world/live/tests.rs` are the only ones needing a server;
@@ -182,8 +183,29 @@ fair_value = base_value + Σ terms + Σ scarcity , floored at floor_value,
 missing, duplicated, or prices on a key `Field::from_key` does not know — the GDD §14
 no-orphan-instrument rule enforced at load rather than discovered in play.
 
-Still planned per GDD §6: `impacts.json`, `licences.json`, `achievements.json`,
-`strings.json`.
+`assets/data/impacts.json` is the state-delta -> price-shock table (GDD §5.5) and the balance
+surface of the whole game. A rule keys on a `Field`, an instrument class, and a **direction of
+travel** along the world's own parent link (`Fundamentals::parent`):
+
+- `self` — the listing's own entity moved.
+- `parent` — the listing is the moved entity's parent. A resource node is not a listing, so
+  this is the *only* route its status change has to the board, and it reaches the commodity
+  above it.
+- `child` — the listing is a child of the moved entity. A famine is a fact about a province
+  and the towns inside it are what starve.
+
+Levels belong in `instruments.json` and reach price as drift; `impacts.json` is only the
+jolt. A mine working out therefore appears in both, on purpose: the jolt is immediate, the
+revaluation is permanent.
+
+The `orders` block of `game_config.json` is the execution model. **Size costs twice** — as
+slippage on the fill, and as a `flow` mark left on the price that decays over following
+settlements. `OrderConfig::depth(liquidity)` is where GDD §5.2's promise that relic lots have
+"enormous spreads" is actually kept. `orders::quote` is used for both the ticket's estimate
+and the execution, deliberately: two code paths there would be a way to lie to the player
+about their own costs.
+
+Still planned per GDD §6: `licences.json`, `achievements.json`, `strings.json`.
 
 **`impacts.json` is the balance surface of the entire game and must never become Rust
 constants** — it is where a designer tunes how hard a famine hits grain. `Field::key()` is
@@ -196,9 +218,11 @@ through `Field::from_key`.
 
 `src/main.rs` wires `macroquad_toolkit::capture` under the **`TB_REALMS`** env prefix. Setting
 `TB_REALMS_CAPTURE_PATH` boots a named scene, simulates fixed frames at a fixed timestep,
-writes a PNG, and exits (compiled out on wasm32). Right now there is one boot state, so
-`-Scenes` only picks the output filename — wiring real scenes (`floor`, `listing`,
-`portfolio`, …) via `begin_capture_scene` is part of building the screens.
+writes a PNG, and exits (compiled out on wasm32). `Game::begin_capture_scene` holds the scene
+until the board is non-empty, because every screen here is downstream of the world answering.
+Scenes: `boards` (anything unrecognised) shows the opening state; **`trading` selects the
+deepest listing and buys it**, so one screenshot covers the ticket, the fill, the tape and a
+real position in the ledger — the whole order path, which no static scene shows.
 
 A capture runs in about a second of wall-clock, while the server ticks every ten, so a
 captured frame will normally show a full board but **zero settlements observed**. That is
@@ -238,11 +262,14 @@ hand-edit would survive exactly until the next sync. Change it there and re-sync
 GDD §13 is M0 seam → M1 instruments → M2 market → M3 floor UI → M4 chronicle/research →
 M5 licences and eras → M6 Live mode → M7 polish.
 
-**M0 and M1 are done, and M6 was folded into M0** — Live is the mode that exists. What
-remains in GDD order: **M2 the market** — the five-term price formation of §5.4,
-`impacts.json` keyed on `Field`, order execution, fees, market impact, portfolio and P&L.
-`market/` must not depend on macroquad, so the century-long backtest (GDD §14) can run
-headless; keep it that way.
+**M0, M1 and M2 are done, and M6 was folded into M0** — Live is the mode that exists. What
+remains in GDD order: **M3 the floor** — a listing screen with a chart drawn from
+`Instrument::history` via `macroquad_toolkit::series`, then M4's chronicle and research
+browser.
+
+`market/` must not depend on macroquad, and `state/portfolio.rs` must not either — the
+century-long backtest of GDD §14 runs through both and is the test that catches balance
+regressions no screenshot can. Keep it that way.
 
 The GDD's "the game must be complete and shippable without a server ever running" no longer
 holds as written: without a server there is no world. Restoring it means writing the Solo

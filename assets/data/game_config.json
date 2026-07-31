@@ -15,5 +15,15 @@
     "max_move": 0.35,
     "min_price": 0.25,
     "history_capacity": 256
+  },
+  "orders": {
+    "starting_capital": 10000.0,
+    "commission": 0.004,
+    "minimum_fee": 2.0,
+    "depth_units": 400.0,
+    "slippage_scale": 0.6,
+    "max_slippage": 0.25,
+    "flow_scale": 0.30,
+    "flow_decay": 0.45
   }
 }

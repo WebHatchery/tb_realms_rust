@@ -7,6 +7,7 @@
 //! change to `Game::new` and nothing else in this file.
 
 use crate::data::GameData;
+use crate::market::orders::Side;
 use crate::market::BoardChange;
 use crate::state::{migrate_save_value, GameSession, SaveData};
 use crate::ui::{self, UiAction, UiContext};
@@ -39,6 +40,10 @@ pub struct Game {
     /// Set when the exchange could not be opened at all — a missing spectator
     /// token, say. Rendered as a dead wire rather than silently polling nothing.
     fatal: Option<SourceStatus>,
+    /// A scene the capture harness asked for, applied once the world has
+    /// answered. Held rather than applied immediately because every scene worth
+    /// photographing needs a board, and the board arrives over a wire.
+    pending_scene: Option<String>,
 }
 
 impl Game {
@@ -71,7 +76,7 @@ impl Game {
                 }
             };
 
-        let session = GameSession::new(&data.config.market);
+        let session = GameSession::new(&data.config.market, &data.config.orders);
         let mut game = Self {
             data,
             session,
@@ -82,6 +87,7 @@ impl Game {
             events: EventBus::new(),
             save_exists: false,
             fatal,
+            pending_scene: None,
         };
         game.refresh_save_state();
         game
@@ -134,6 +140,44 @@ impl Game {
         for action in actions {
             self.apply_action(action);
         }
+
+        self.apply_capture_scene();
+    }
+
+    /// Seed a named scene for the screenshot harness (GDD 14).
+    ///
+    /// Called once before the capture loop; the scene is applied on the first
+    /// frame that actually has a board, because everything worth photographing
+    /// here is downstream of the world answering.
+    pub fn begin_capture_scene(&mut self, scene: &str) {
+        self.pending_scene = Some(scene.to_owned());
+    }
+
+    /// Put the exchange into the state a capture scene names.
+    ///
+    /// `trading` is the one that earns its keep: it selects a listing and buys
+    /// it, so a screenshot covers the ticket, the fill, and the ledger with a
+    /// real position in it — the whole order path, which no static scene shows.
+    fn apply_capture_scene(&mut self) {
+        let Some(scene) = self.pending_scene.clone() else {
+            return;
+        };
+        if self.session.board().is_empty() {
+            return;
+        }
+        if scene == "trading" {
+            let deepest = self
+                .session
+                .board()
+                .listings()
+                .max_by(|a, b| a.liquidity.total_cmp(&b.liquidity))
+                .map(|listing| listing.entity.clone());
+            if let Some(entity) = deepest {
+                self.session.select(entity);
+                self.place_order(Side::Buy);
+            }
+        }
+        self.pending_scene = None;
     }
 
     pub fn draw(&mut self) {
@@ -190,12 +234,23 @@ impl Game {
             .session
             .list(&snapshot, &self.data.instruments, &self.data.config.market);
         if let Some(delta) = turning {
-            self.session.settle_prices(
+            let books = self.session.settle_prices(
                 delta,
                 &snapshot,
                 &self.data.impacts,
                 &self.data.config.market,
+                &self.data.config.orders,
             );
+            if books.income > 0.0 {
+                self.notifications
+                    .success(format!("Coupons paid: {:.0} crowns", books.income));
+            }
+            // A position in something the world stopped carrying is a total
+            // loss, not a markdown. It deserves to be said out loud.
+            for symbol in &books.written_off {
+                self.notifications
+                    .danger(format!("{symbol} delisted — the position is a total loss"));
+            }
         }
         change
     }
@@ -208,6 +263,24 @@ impl Game {
             UiAction::ReadNow => self.notifications.info("Reading on the next poll"),
             UiAction::Save => self.save_game(),
             UiAction::Load => self.load_game(),
+            UiAction::Select(entity) => self.session.select(entity),
+            UiAction::ResizeTicket(by) => self.session.resize_ticket(by),
+            UiAction::Order(side) => self.place_order(side),
+        }
+    }
+
+    fn place_order(&mut self, side: Side) {
+        match self.session.order(side, &self.data.config.orders) {
+            Ok(fill) => self.notifications.success(format!(
+                "{} {} {} at {:.2} — {:.0} crowns, {:.0} in friction",
+                side.label(),
+                fill.units,
+                fill.symbol,
+                fill.price,
+                fill.cash.abs(),
+                fill.friction()
+            )),
+            Err(err) => self.notifications.warning(err.label()),
         }
     }
 
@@ -241,7 +314,11 @@ impl Game {
                 // Tell the world source too, or the next read would re-serve
                 // every chronicle line the exchange had already read.
                 self.world.resume_from(save.cursor);
-                self.session = GameSession::from_save(&save, &self.data.config.market);
+                self.session = GameSession::from_save(
+                    &save,
+                    &self.data.config.market,
+                    &self.data.config.orders,
+                );
                 self.notifications.success("Ledger loaded");
                 self.refresh_save_state();
             }

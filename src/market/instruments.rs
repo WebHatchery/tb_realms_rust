@@ -318,6 +318,12 @@ impl Board {
         self.listings.values()
     }
 
+    /// One listing, if the world still backs it. A position whose entity is no
+    /// longer here is a position in something that has ceased to exist.
+    pub fn get(&self, entity: &EntityRef) -> Option<&Instrument> {
+        self.listings.get(entity)
+    }
+
     pub fn len(&self) -> usize {
         self.listings.len()
     }

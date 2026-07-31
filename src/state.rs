@@ -1,18 +1,21 @@
 //! The exchange's own state: what it has watched the world do, what it
-//! currently lists, and what of that survives a restart.
+//! currently lists, what the broker holds, and what of that survives a restart.
 //!
-//! There are no positions here yet — prices and orders arrive in M2 (GDD 13).
-//! What exists now is the [`Board`], derived wholly from the world, and the
-//! settlement log: one record per turning, which is what the digest and records
-//! screens are built from. The chronicle cursor rides along so a reopened
-//! exchange resumes reading where it stopped rather than re-reading a century of
-//! prose.
+//! Three things live here and they are saved on very different terms:
 //!
-//! The board is deliberately **not** saved. It is a function of the world, and
-//! the next read rebuilds it exactly; persisting it would only create a way for
-//! the exchange's idea of what exists to drift from the world's.
+//! - The [`Board`] is **not** saved. It is a function of the world, and the next
+//!   read rebuilds it exactly; persisting it would only create a way for the
+//!   exchange's idea of what exists to drift from the world's.
+//! - The settlement log is **not** saved. It is a display buffer.
+//! - The [`Portfolio`] **is** saved, because it is the one thing here that no
+//!   world view can reconstruct.
+
+pub mod portfolio;
+
+pub use portfolio::{OrderError, Portfolio, PortfolioSave};
 
 use crate::data::GameConfig;
+use crate::market::orders::{Fill, OrderConfig, Side};
 use crate::market::{Board, BoardChange, ImpactTable, InstrumentRules, MarketConfig};
 use crate::world::delta::{Change, WorldDelta};
 use crate::world::fundamentals::EntityRef;
@@ -129,6 +132,10 @@ pub struct SaveData {
     /// a save written before prices existed still loads.
     #[serde(default)]
     pub market_state: u64,
+    /// The ledger. The only part of this save that could not be rebuilt from
+    /// the world on the next read.
+    #[serde(default)]
+    pub portfolio: PortfolioSave,
 }
 
 /// The live session.
@@ -139,6 +146,16 @@ pub struct GameSession {
     /// What the exchange currently lists — the world's own answer, not the
     /// exchange's opinion.
     board: Board,
+    /// The broker's ledger — the one thing here a world view cannot rebuild.
+    portfolio: Portfolio,
+    /// The mark the player's own orders have left on each price, decaying each
+    /// settlement. This is GDD 5.4's `flow` term: your size is not free, and it
+    /// is still costing you a year after you traded.
+    order_flow: BTreeMap<EntityRef, f32>,
+    /// The listing the desk is looking at, if any.
+    selected: Option<EntityRef>,
+    /// The size on the ticket.
+    pub ticket_units: i64,
     /// The market's own noise stream, kept apart from anything the world uses
     /// so the two cannot desynchronise each other (GDD 5.8). Its state is saved,
     /// so a reloaded exchange continues the same century rather than starting a
@@ -150,15 +167,94 @@ pub struct GameSession {
     pub observed: u64,
 }
 
+/// The size a ticket opens at, and the step its buttons move by.
+const TICKET_STEP: i64 = 10;
+
+/// What a settlement did to the ledger, as distinct from what it did to prices.
+#[derive(Debug, Clone, Default)]
+pub struct SettlementBooks {
+    /// Coupons paid by everything held.
+    pub income: f32,
+    /// Positions written off because the world stopped carrying the thing they
+    /// were a claim on. A total loss, by design.
+    pub written_off: Vec<String>,
+}
+
 impl GameSession {
-    pub fn new(market: &MarketConfig) -> Self {
+    pub fn new(market: &MarketConfig, orders: &OrderConfig) -> Self {
         Self {
             settlements: Vec::new(),
             board: Board::new(),
+            portfolio: Portfolio::new(orders),
+            order_flow: BTreeMap::new(),
+            selected: None,
+            ticket_units: TICKET_STEP,
             market_rng: SeededRng::new(market.seed),
             last_tick: 0,
             observed: 0,
         }
+    }
+
+    pub fn portfolio(&self) -> &Portfolio {
+        &self.portfolio
+    }
+
+    /// The listing the desk is looking at, if it is still listed. A selection
+    /// whose paper was struck off simply reads as no selection.
+    pub fn selected(&self) -> Option<&crate::market::Instrument> {
+        self.board.get(self.selected.as_ref()?)
+    }
+
+    pub fn select(&mut self, entity: EntityRef) {
+        self.selected = Some(entity);
+    }
+
+    /// Resize the ticket, never below one unit.
+    pub fn resize_ticket(&mut self, by: i64) {
+        self.ticket_units = (self.ticket_units + by).max(1);
+    }
+
+    /// Place an order against the selected listing.
+    ///
+    /// The flow it leaves is accumulated here rather than applied now: an
+    /// order's mark on the price arrives at the *next* settlement, which is what
+    /// makes it a cost the trader cannot immediately trade back out of.
+    pub fn order(&mut self, side: Side, orders: &OrderConfig) -> Result<Fill, OrderError> {
+        let Some(entity) = self.selected.clone() else {
+            return Err(OrderError::NoUnits);
+        };
+        let Some(listing) = self.board.get(&entity).cloned() else {
+            return Err(OrderError::NoUnits);
+        };
+        let fill = self.portfolio.execute(
+            &listing,
+            side,
+            self.ticket_units,
+            self.settlements.first().map(|s| s.year).unwrap_or(0),
+            orders,
+        )?;
+        *self.order_flow.entry(entity).or_default() += fill.flow;
+        Ok(fill)
+    }
+
+    /// What the selected listing would cost at the ticket's size, and whether
+    /// the ledger would allow it. Shown before trading, and computed by exactly
+    /// the code that would execute it.
+    pub fn preview(
+        &self,
+        side: Side,
+        orders: &OrderConfig,
+    ) -> Option<(Fill, Result<(), OrderError>)> {
+        let listing = self.selected()?;
+        let fill = self.portfolio.preview(
+            listing,
+            side,
+            self.ticket_units,
+            self.settlements.first().map(|s| s.year).unwrap_or(0),
+            orders,
+        );
+        let allowed = self.portfolio.check(&fill);
+        Some((fill, allowed))
     }
 
     /// Bring the board in line with a fresh reading of the world.
@@ -186,13 +282,24 @@ impl GameSession {
         snapshot: &Snapshot,
         impacts: &ImpactTable,
         market: &MarketConfig,
-    ) {
+        orders: &OrderConfig,
+    ) -> SettlementBooks {
         let shocks = impacts.shocks(delta, snapshot);
-        // No orders yet, so the player's own flow moves nothing (GDD 5.4's
-        // fifth term). Order execution fills this in.
-        let flow: BTreeMap<EntityRef, f32> = BTreeMap::new();
         self.board
-            .settle(&shocks, &flow, market, &mut self.market_rng);
+            .settle(&shocks, &self.order_flow, market, &mut self.market_rng);
+
+        // The floor forgets a large order gradually. Decaying after settling
+        // rather than before means the year in which an order was struck is the
+        // year it hits hardest, which is the honest ordering.
+        for flow in self.order_flow.values_mut() {
+            *flow *= orders.flow_decay;
+        }
+        self.order_flow.retain(|_, flow| flow.abs() > 0.0001);
+
+        SettlementBooks {
+            income: self.portfolio.collect_income(&self.board),
+            written_off: self.portfolio.write_off_delisted(&self.board),
+        }
     }
 
     /// The market noise stream's whole state — its seed and everything drawn
@@ -225,16 +332,24 @@ impl GameSession {
             cursor,
             last_tick: self.last_tick,
             market_state: self.market_rng.state(),
+            portfolio: self.portfolio.to_save(),
         }
     }
 
-    pub fn from_save(save: &SaveData, market: &MarketConfig) -> Self {
+    pub fn from_save(save: &SaveData, market: &MarketConfig, orders: &OrderConfig) -> Self {
         Self {
             settlements: Vec::new(),
             // The board is a function of the world, so it is rebuilt from the
             // next read rather than restored from a save that could disagree
             // with what the world now carries.
             board: Board::new(),
+            portfolio: Portfolio::from_save(&save.portfolio, orders),
+            // Flow is not saved: it decays to nothing within a few settlements
+            // anyway, and a mark left on a price by an order struck before a
+            // restart is not worth a migration to carry.
+            order_flow: BTreeMap::new(),
+            selected: None,
+            ticket_units: TICKET_STEP,
             // A state of zero means a save written before prices existed; start
             // that session's stream from the seed rather than from nothing.
             market_rng: if save.market_state == 0 {
@@ -270,6 +385,7 @@ pub fn migrate_save_value(
         cursor: 0,
         last_tick: 0,
         market_state: 0,
+        portfolio: PortfolioSave::default(),
     })
 }
 
@@ -286,6 +402,10 @@ mod tests {
 
     fn market() -> MarketConfig {
         data().config.market
+    }
+
+    fn orders() -> OrderConfig {
+        data().config.orders
     }
 
     /// A freshly seeded world as a spectator receives it.
@@ -308,7 +428,7 @@ mod tests {
 
     #[test]
     fn settlements_are_logged_newest_first_and_bounded() {
-        let mut session = GameSession::new(&market());
+        let mut session = GameSession::new(&market(), &orders());
         for year in 1..=(LOG_CAPACITY as u32 + 10) {
             session.record(&delta(year, year as u64), &BoardChange::default());
         }
@@ -331,11 +451,11 @@ mod tests {
 
     #[test]
     fn a_save_round_trips_the_cursor_and_tick() {
-        let mut session = GameSession::new(&market());
+        let mut session = GameSession::new(&market(), &orders());
         session.record(&delta(341, 17), &BoardChange::default());
 
         let save = session.to_save("0.1.0", 4_212);
-        let resumed = GameSession::from_save(&save, &market());
+        let resumed = GameSession::from_save(&save, &market(), &orders());
 
         assert_eq!(resumed.last_tick, 17);
         // Neither the log nor the board is persisted — the log is a display
@@ -350,7 +470,7 @@ mod tests {
         let rules = data().instruments;
         let view = world();
 
-        let mut session = GameSession::new(&market());
+        let mut session = GameSession::new(&market(), &orders());
         let opening = session.list(&Snapshot::read(&view), &rules, &market());
 
         assert!(!session.board().is_empty(), "the world hangs the board");

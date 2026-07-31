@@ -17,10 +17,12 @@
 
 mod board;
 mod chart;
+mod chronicle;
 mod desk;
 mod ledger;
 mod listing;
 mod movers;
+mod research;
 mod settlements;
 mod widgets;
 
@@ -33,6 +35,7 @@ use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::draw_ui_text_ex;
 use macroquad_toolkit::ui::VirtualUi;
+use mytherra_core::world::EventKind;
 use mytherra_protocol::WorldView;
 use widgets::{panel, truncate};
 
@@ -52,6 +55,12 @@ pub enum UiAction {
     OpenListing(EntityRef),
     /// Return to the floor.
     CloseListing,
+    /// Show a screen that needs no argument.
+    Show(Screen),
+    /// Narrow the chronicle to one kind of line, or `None` for all of them.
+    FilterChronicle(Option<EventKind>),
+    /// Browse a class of world entity.
+    Research(String),
     /// Change the ticket's size by this many units.
     ResizeTicket(i64),
     /// Place the ticket as it stands.
@@ -107,6 +116,7 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
     // The header is common to both screens: the world's clock and the state of
     // the wire are true wherever the player is standing.
     draw_header(&ctx);
+    draw_nav(&ctx, mouse, &mut actions);
     match ctx.session.screen() {
         Screen::Floor => {
             board::draw(&ctx, mouse, &mut actions);
@@ -116,9 +126,61 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
             desk::draw(&ctx, mouse, &mut actions);
         }
         Screen::Listing => listing::draw(&ctx, mouse, &mut actions),
+        Screen::Chronicle => chronicle::draw(&ctx, mouse, &mut actions),
+        Screen::Research => research::draw(&ctx, mouse, &mut actions),
     }
 
     actions
+}
+
+/// The way between screens. A listing's page is deliberately absent: it is
+/// reached from a listing, and there is no such thing as "the" listing to put
+/// behind a tab.
+fn draw_nav(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
+    let here = ctx.session.screen();
+    // Clear of the clock to its left, which grows with the era's name, and of
+    // the wire badge to its right.
+    let mut x = 430.0;
+    for (label, screen) in [
+        ("Floor", Screen::Floor),
+        ("Chronicle", Screen::Chronicle),
+        ("Research", Screen::Research),
+    ] {
+        let rect = Rect::new(x, 54.0, 96.0, 26.0);
+        let hovered = rect.contains(mouse);
+        // A listing's page counts as standing on the floor, because that is
+        // what Back returns to.
+        let current = here == screen || (screen == Screen::Floor && here == Screen::Listing);
+        let fill = if current {
+            Color::new(0.20, 0.28, 0.38, 1.0)
+        } else if hovered {
+            Color::new(0.16, 0.19, 0.24, 1.0)
+        } else {
+            Color::new(0.11, 0.12, 0.15, 1.0)
+        };
+        draw_surface(
+            rect,
+            &SurfaceStyle::new(fill).with_border(1.0, dark::ACCENT),
+        );
+        draw_ui_text_ex(
+            label,
+            rect.x + 12.0,
+            rect.y + 18.0,
+            TextStyle::new(
+                14.0,
+                if current {
+                    dark::TEXT_BRIGHT
+                } else {
+                    dark::TEXT
+                },
+            )
+            .params(),
+        );
+        if hovered && is_mouse_button_released(MouseButton::Left) {
+            actions.push(UiAction::Show(screen));
+        }
+        x += 104.0;
+    }
 }
 
 fn draw_header(ctx: &UiContext<'_>) {

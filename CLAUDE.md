@@ -16,10 +16,11 @@ turns a reading into a `Board` of listings with fair values; `src/market/impact.
 typed deltas into shocks; `src/market/pricing.rs` moves each price by drift + shock + noise +
 flow; `src/market/orders.rs` prices an order including its own market impact; and
 `src/state/portfolio.rs` is the ledger. A century can be traded headlessly, and `src/ui/`
-carries two screens: the floor (board, ledger, movers, settlements, desk with an order
-ticket) and a listing's own page (chart, fundamentals, price-move decomposition). What
-remains is **M4**: the chronicle feed and the research browser. `gdd.md` is the specification
-and the source of truth.
+carries four screens: the floor (board, ledger, movers, settlements, desk with an order
+ticket), a listing's own page (chart, fundamentals, price-move decomposition), the chronicle,
+and the research browser. What remains is **M5**: information licences gated on
+`VisibilityScope`, era transitions and cataclysms, and the records archive. `gdd.md` is the
+specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -149,8 +150,18 @@ Target layout (GDD §11) — `game.rs` state machine, `world.rs` + `world/{solo,
 ### Screens (GDD 9)
 
 `ui.rs` owns the vocabulary (`UiAction`), the context, and the layout constants; each panel is
-its own file under `ui/`. `GameSession::screen()` picks between the floor and a listing's
-page; `Esc` or the Back button returns.
+its own file under `ui/`. `GameSession::screen()` picks the screen; the nav sits in the header, and
+`Esc` or the Back button leaves a listing's page.
+
+**The chronicle screen is Pillar 4 as a layout.** The world's prose runs down the left; what
+the floor actually did that year runs down the right; *nothing joins them but the year*,
+because nothing that prices may read a word of the chronicle. The cross-link of GDD §9 runs
+from a **price move** to the paper that moved — never from a line of prose to a listing, since
+nothing in the game knows what the prose is about. Each ticker opens that listing's page.
+
+The chronicle is seeded from the first `WorldView`'s own archive (`seed_chronicle`, once only)
+so the exchange opens with the recent newspaper already on the desk. The world has a past
+whether or not this session watched it happen.
 
 **The chart draws the envelope, not a line.** Each `series` bucket carries the high and low it
 reached, so the plot is a filled band with the closing value traced over it — a line through
@@ -239,7 +250,7 @@ until the board is non-empty, because every screen here is downstream of the wor
 Scenes: `boards` (anything unrecognised) shows the opening state; **`trading` selects the
 deepest listing and buys it**, so one screenshot covers the ticket, the fill, the tape and a
 real position in the ledger — the whole order path, which no static scene shows; `listing`
-does the same and then opens that listing's page.
+does the same and then opens that listing's page; `chronicle` and `research` open those.
 
 A capture runs in about a second of wall-clock, while the server ticks every ten, so a
 captured frame will normally show a full board but **zero settlements observed**. That is

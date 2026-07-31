@@ -11,16 +11,21 @@
 //!   world view can reconstruct.
 
 pub mod portfolio;
+pub mod settlement;
 
 pub use portfolio::{OrderError, Portfolio, PortfolioSave};
+pub use settlement::SettlementRecord;
+
+use settlement::movers;
 
 use crate::data::{GameConfig, GameData};
 use crate::market::orders::{Fill, OrderConfig, Side};
 use crate::market::{Board, BoardChange, Instrument, MarketConfig};
-use crate::world::delta::{Change, WorldDelta};
+use crate::world::delta::WorldDelta;
 use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
 use macroquad_toolkit::rng::SeededRng;
+use mytherra_core::world::{EventKind, WorldEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -30,93 +35,13 @@ use std::collections::BTreeMap;
 /// records screen's job once there are trades to record (GDD 9).
 const LOG_CAPACITY: usize = 64;
 
-/// One turning of the world, as the exchange saw it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettlementRecord {
-    pub year: u32,
-    pub tick: u64,
-    /// World years covered — more than one if the exchange was off the wire.
-    pub years: u32,
-    pub moves: usize,
-    pub listed: usize,
-    pub delisted: usize,
-    /// Listings whose fair value moved this turning.
-    pub revalued: usize,
-    /// A few of the instruments that appeared or vanished, by ticker. This is
-    /// the content no authored market can produce — a house whose blood ran
-    /// out, a settlement razed — so the digest says which, not merely how many.
-    pub notable: Vec<String>,
-    /// The fields that moved furthest, in the vocabulary the balance tables
-    /// will use. The embryo of the price-move decomposition (GDD 5.4): a
-    /// player must always be able to ask why, and get an answer.
-    pub top_moves: Vec<String>,
-    /// The chronicle's own words for this turning, if it had any: the newspaper
-    /// beside the numbers (GDD 5.5). Never read by anything that prices.
-    pub headline: Option<String>,
-}
+/// How many chronicle lines the exchange keeps to read back. The world's own
+/// archive is far longer; this is the run of newspapers on the desk.
+const CHRONICLE_CAPACITY: usize = 400;
 
-/// How many appearances/disappearances a single record names before it stops.
-const NOTABLE_LIMIT: usize = 3;
-
-/// A discrete change in words — the direction lives in the labels rather than
-/// in a magnitude, so it has to be spelled out.
-fn describe(change: &Change) -> String {
-    match change {
-        Change::Scalar { before, after } => format!("{before:.1} → {after:.1}"),
-        Change::Flag { after: true, .. } => "set".to_owned(),
-        Change::Flag { after: false, .. } => "lifted".to_owned(),
-        Change::Status { before, after } => format!("{before} → {after}"),
-    }
-}
-
-impl SettlementRecord {
-    fn from_delta(delta: &WorldDelta, board: &BoardChange) -> Self {
-        // Delistings lead: a position in something that no longer exists is the
-        // more urgent news than a new listing to consider. These are the board's
-        // own tickers rather than the delta's raw entities, because a resource
-        // node appearing is supply news, not a security anyone can hold.
-        let notable = board
-            .delisted
-            .iter()
-            .map(|symbol| format!("{symbol} delisted"))
-            .chain(board.listed.iter().map(|symbol| format!("{symbol} listed")))
-            .take(NOTABLE_LIMIT)
-            .collect();
-
-        let top_moves = delta
-            .most_moved(NOTABLE_LIMIT)
-            .into_iter()
-            .map(|moved| {
-                let magnitude = moved.change.magnitude();
-                if magnitude == 0.0 {
-                    // A flag or status change: the direction is in the labels,
-                    // not in a number, so print the labels.
-                    format!("{} {}", moved.entity.id(), describe(&moved.change))
-                } else {
-                    format!(
-                        "{} {} {:+.1}",
-                        moved.entity.id(),
-                        moved.field.key(),
-                        magnitude
-                    )
-                }
-            })
-            .collect();
-
-        Self {
-            year: delta.to_year,
-            tick: delta.to_tick,
-            years: delta.years(),
-            moves: delta.moves.len(),
-            listed: board.listed.len(),
-            delisted: board.delisted.len(),
-            revalued: board.revalued,
-            notable,
-            top_moves,
-            headline: delta.events.last().map(|event| event.message.clone()),
-        }
-    }
-}
+/// The class the research browser opens on. Provinces: the broadest paper, and
+/// the one whose fundamentals a newcomer can read without knowing anything.
+const DEFAULT_RESEARCH_CLASS: &str = "regional_bond";
 
 /// What survives a restart. Deliberately small: everything else in the session
 /// is re-derived from the world on the next read.
@@ -158,6 +83,12 @@ pub struct GameSession {
     snapshot: Snapshot,
     /// Which screen the exchange is showing.
     screen: Screen,
+    /// The chronicle as read so far, newest first.
+    chronicle: Vec<WorldEvent>,
+    /// Which kind of chronicle line the reader is filtering to, if any.
+    chronicle_filter: Option<EventKind>,
+    /// The instrument class the research browser is showing.
+    research_class: String,
     /// The listing the desk is looking at, if any.
     selected: Option<EntityRef>,
     /// The size on the ticket.
@@ -183,6 +114,10 @@ pub enum Screen {
     Floor,
     /// One listing in full: its chart, its fundamentals, and why it moved.
     Listing,
+    /// The world in its own words, beside what actually moved.
+    Chronicle,
+    /// Every entity the exchange watches, class by class.
+    Research,
 }
 
 /// Everything one reading of the world did.
@@ -211,6 +146,9 @@ impl GameSession {
             order_flow: BTreeMap::new(),
             snapshot: Snapshot::default(),
             screen: Screen::Floor,
+            chronicle: Vec::new(),
+            chronicle_filter: None,
+            research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
             selected: None,
             ticket_units: TICKET_STEP,
             market_rng: SeededRng::new(market.seed),
@@ -317,10 +255,49 @@ impl GameSession {
                 income: self.portfolio.collect_income(&self.board),
                 written_off: self.portfolio.write_off_delisted(&self.board),
             };
+
+            // Logged here rather than by the caller because a settlement's
+            // record includes what the *settled* board did, which only exists
+            // after the two steps above have run.
+            self.last_tick = delta.to_tick;
+            self.observed += 1;
+            self.settlements.insert(
+                0,
+                SettlementRecord::from_delta(delta, &board, movers(&self.board)),
+            );
+            self.settlements.truncate(LOG_CAPACITY);
+
+            // The chronicle is kept whole and separate from the settlement log:
+            // it is the newspaper, and a reader wants a run of it rather than
+            // one line per year (GDD 5.5).
+            for event in delta.events.iter().rev() {
+                self.chronicle.insert(0, event.clone());
+            }
+            self.chronicle.truncate(CHRONICLE_CAPACITY);
         }
 
         self.snapshot = snapshot;
         Observed { board, books }
+    }
+
+    /// The chronicle as read so far, newest first. Prose, and nothing that
+    /// prices may read it (GDD 5.5).
+    pub fn chronicle(&self) -> &[WorldEvent] {
+        &self.chronicle
+    }
+
+    /// Fill the chronicle from the world's own archive, once.
+    ///
+    /// The first view carries the recent newspaper already, so an exchange that
+    /// has just opened should show it rather than a blank page until the world
+    /// next turns — the world has a past whether or not this session watched it
+    /// happen. Only ever fills an empty chronicle: after that, the lines arrive
+    /// a year at a time and the archive would duplicate them.
+    pub fn seed_chronicle(&mut self, archive: &[WorldEvent]) {
+        if !self.chronicle.is_empty() || archive.is_empty() {
+            return;
+        }
+        self.chronicle = archive.iter().take(CHRONICLE_CAPACITY).cloned().collect();
     }
 
     /// The world as last read, for the screens that show fundamentals.
@@ -344,19 +321,32 @@ impl GameSession {
         self.screen = Screen::Floor;
     }
 
+    /// Show a screen. A listing's page is reached through `open_listing`
+    /// instead, because it needs to know *which* listing.
+    pub fn show(&mut self, screen: Screen) {
+        self.screen = screen;
+    }
+
+    pub fn chronicle_filter(&self) -> Option<EventKind> {
+        self.chronicle_filter
+    }
+
+    pub fn filter_chronicle(&mut self, kind: Option<EventKind>) {
+        self.chronicle_filter = kind;
+    }
+
+    pub fn research_class(&self) -> &str {
+        &self.research_class
+    }
+
+    pub fn research(&mut self, class: String) {
+        self.research_class = class;
+    }
+
     /// The market noise stream's whole state — its seed and everything drawn
     /// from it since. Shown on the records screen, and saved.
     pub fn market_state(&self) -> u64 {
         self.market_rng.state()
-    }
-
-    /// Record a turning of the world, and what it did to the board.
-    pub fn record(&mut self, delta: &WorldDelta, board: &BoardChange) {
-        self.last_tick = delta.to_tick;
-        self.observed += 1;
-        self.settlements
-            .insert(0, SettlementRecord::from_delta(delta, board));
-        self.settlements.truncate(LOG_CAPACITY);
     }
 
     /// Settlements observed, newest first.
@@ -388,6 +378,11 @@ impl GameSession {
             portfolio: Portfolio::from_save(&save.portfolio, orders),
             snapshot: Snapshot::default(),
             screen: Screen::Floor,
+            // The chronicle is re-read from the world's own archive on the next
+            // poll, from the cursor this save carries.
+            chronicle: Vec::new(),
+            chronicle_filter: None,
+            research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
             // Flow is not saved: it decays to nothing within a few settlements
             // anyway, and a mark left on a price by an order struck before a
             // restart is not worth a migration to carry.
@@ -434,154 +429,4 @@ pub fn migrate_save_value(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::GameData;
-    use crate::world::delta::WorldDelta;
-    use mytherra_protocol::{project_world, spectator_standing, WorldView};
-
-    fn data() -> GameData {
-        GameData::load().expect("the exchange's data loads")
-    }
-
-    fn market() -> MarketConfig {
-        data().config.market
-    }
-
-    fn orders() -> OrderConfig {
-        data().config.orders
-    }
-
-    /// A freshly seeded world as a spectator receives it.
-    fn world() -> WorldView {
-        let content = mytherra_core::data::GameData::load().expect("mytherra content loads");
-        project_world(
-            &mytherra_core::world::WorldState::new(&content),
-            &spectator_standing(),
-        )
-    }
-
-    fn delta(year: u32, tick: u64) -> WorldDelta {
-        WorldDelta {
-            to_tick: tick,
-            from_year: year.saturating_sub(1),
-            to_year: year,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn settlements_are_logged_newest_first_and_bounded() {
-        let mut session = GameSession::new(&market(), &orders());
-        for year in 1..=(LOG_CAPACITY as u32 + 10) {
-            session.record(&delta(year, year as u64), &BoardChange::default());
-        }
-
-        assert_eq!(
-            session.settlements().len(),
-            LOG_CAPACITY,
-            "the log is bounded"
-        );
-        assert_eq!(
-            session.settlements()[0].year,
-            LOG_CAPACITY as u32 + 10,
-            "newest first"
-        );
-        // The count outlives the buffer, so the digest can say how long the
-        // exchange has been open even after the log has rolled.
-        assert_eq!(session.observed, LOG_CAPACITY as u64 + 10);
-        assert_eq!(session.last_tick, LOG_CAPACITY as u64 + 10);
-    }
-
-    #[test]
-    fn a_save_round_trips_the_cursor_and_tick() {
-        let mut session = GameSession::new(&market(), &orders());
-        session.record(&delta(341, 17), &BoardChange::default());
-
-        let save = session.to_save("0.1.0", 4_212);
-        let resumed = GameSession::from_save(&save, &market(), &orders());
-
-        assert_eq!(resumed.last_tick, 17);
-        // Neither the log nor the board is persisted — the log is a display
-        // buffer and the board is a function of the world, and the next read
-        // repopulates both.
-        assert!(resumed.settlements().is_empty());
-        assert!(resumed.board().is_empty());
-    }
-
-    #[test]
-    fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
-        let data = data();
-        let view = world();
-
-        let mut session = GameSession::new(&market(), &orders());
-        let opening = session.observe(Snapshot::read(&view), None, &data).board;
-
-        assert!(!session.board().is_empty(), "the world hangs the board");
-        assert_eq!(opening.listed.len(), session.board().len());
-        assert!(opening.delisted.is_empty());
-        // The reading is kept, so the listing screen can show the fundamentals
-        // a price was derived from without asking the world again.
-        assert!(session.snapshot().iter().count() > 0);
-
-        // A settlement's digest reports the board's own tickers, so a razed
-        // town reads as paper struck off rather than as an entity count.
-        let mut razed = view.clone();
-        let lost = razed.settlements.remove(0);
-        let change = session.observe(Snapshot::read(&razed), None, &data).board;
-        session.record(&delta(razed.year + 1, 2), &change);
-
-        assert_eq!(change.delisted.len(), 1);
-        assert_eq!(session.settlements()[0].delisted, 1);
-        assert!(
-            session.settlements()[0].notable[0].ends_with("delisted"),
-            "{:?}",
-            session.settlements()[0].notable
-        );
-        assert!(
-            session
-                .board()
-                .listings()
-                .all(|listing| listing.name != lost.name),
-            "the razed town is off the board"
-        );
-    }
-
-    #[test]
-    fn an_unreadable_save_starts_fresh_rather_than_failing() {
-        // The shipped config with only the version bumped, so a field added to
-        // it later cannot make this test lie about what migration does.
-        let config = GameConfig {
-            version: "0.2.0".to_owned(),
-            ..data().config
-        };
-        let value = serde_json::json!({ "nonsense": true });
-
-        let migrated = migrate_save_value(Some("0.0.1".to_owned()), value, &config).unwrap();
-
-        assert_eq!(migrated.version, "0.2.0");
-        assert_eq!(migrated.cursor, 0);
-        assert_eq!(migrated.last_tick, 0);
-    }
-
-    #[test]
-    fn a_current_save_survives_migration_with_its_cursor_intact() {
-        // The shipped config with only the version bumped, so a field added to
-        // it later cannot make this test lie about what migration does.
-        let config = GameConfig {
-            version: "0.2.0".to_owned(),
-            ..data().config
-        };
-        let value = serde_json::json!({
-            "version": "0.1.0",
-            "cursor": 918,
-            "last_tick": 16_290
-        });
-
-        let migrated = migrate_save_value(Some("0.1.0".to_owned()), value, &config).unwrap();
-
-        assert_eq!(migrated.version, "0.2.0", "stamped to the current version");
-        assert_eq!(migrated.cursor, 918, "the cursor is not lost");
-        assert_eq!(migrated.last_tick, 16_290);
-    }
-}
+mod tests;

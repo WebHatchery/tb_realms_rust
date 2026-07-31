@@ -9,7 +9,7 @@
 use crate::data::GameData;
 use crate::market::orders::Side;
 use crate::market::BoardChange;
-use crate::state::{migrate_save_value, GameSession, SaveData};
+use crate::state::{migrate_save_value, GameSession, SaveData, Screen};
 use crate::ui::{self, UiAction, UiContext};
 use crate::world::live::{LiveWorld, SpectatorClient};
 use crate::world::{Snapshot, SourceStatus, WorldSource};
@@ -101,7 +101,6 @@ impl Game {
         let board = self.rehang_board(turning.as_ref());
 
         if let Some(delta) = turning {
-            self.session.record(&delta, &board);
             // Follow the source's cursor so a save records how far the exchange
             // has actually read.
             self.cursor = self.world.cursor();
@@ -188,6 +187,8 @@ impl Game {
                 self.place_order(Side::Buy);
                 self.session.open_listing(entity);
             }
+            ("chronicle", _) => self.session.show(Screen::Chronicle),
+            ("research", _) => self.session.show(Screen::Research),
             _ => {}
         }
         self.pending_scene = None;
@@ -233,7 +234,10 @@ impl Game {
         }
         self.board_tick = Some(view.tick_count);
 
+        // The world's own back-issues, if this is the first view to arrive.
+        let archive = view.chronicle.clone();
         let snapshot = Snapshot::read(view);
+        self.session.seed_chronicle(&archive);
         let observed = self.session.observe(snapshot, turning, &self.data);
 
         if observed.books.income > 0.0 {
@@ -260,6 +264,9 @@ impl Game {
             UiAction::Select(entity) => self.session.select(entity),
             UiAction::OpenListing(entity) => self.session.open_listing(entity),
             UiAction::CloseListing => self.session.close_listing(),
+            UiAction::Show(screen) => self.session.show(screen),
+            UiAction::FilterChronicle(kind) => self.session.filter_chronicle(kind),
+            UiAction::Research(class) => self.session.research(class),
             UiAction::ResizeTicket(by) => self.session.resize_ticket(by),
             UiAction::Order(side) => self.place_order(side),
         }

@@ -22,6 +22,7 @@ mod desk;
 mod ledger;
 mod listing;
 mod movers;
+mod records;
 mod research;
 mod settlements;
 mod widgets;
@@ -61,6 +62,8 @@ pub enum UiAction {
     FilterChronicle(Option<EventKind>),
     /// Browse a class of world entity.
     Research(String),
+    /// Climb one rung of the information ladder (GDD 5.3).
+    BuyLicence,
     /// Change the ticket's size by this many units.
     ResizeTicket(i64),
     /// Place the ticket as it stands.
@@ -128,6 +131,7 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
         Screen::Listing => listing::draw(&ctx, mouse, &mut actions),
         Screen::Chronicle => chronicle::draw(&ctx, mouse, &mut actions),
         Screen::Research => research::draw(&ctx, mouse, &mut actions),
+        Screen::Records => records::draw(&ctx, mouse, &mut actions),
     }
 
     actions
@@ -145,6 +149,7 @@ fn draw_nav(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         ("Floor", Screen::Floor),
         ("Chronicle", Screen::Chronicle),
         ("Research", Screen::Research),
+        ("Records", Screen::Records),
     ] {
         let rect = Rect::new(x, 54.0, 96.0, 26.0);
         let hovered = rect.contains(mouse);

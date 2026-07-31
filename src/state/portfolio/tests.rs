@@ -23,7 +23,7 @@ fn floor(view: &WorldView) -> (Board, GameData, MarketConfig) {
     let data = data();
     let market = data.config.market.clone();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(view), &data.instruments, &market);
+    board.refresh(&Snapshot::read(view), &data.instruments, &market, 1);
     (board, data, market)
 }
 
@@ -184,7 +184,7 @@ fn a_delisted_position_is_a_total_loss_rather_than_a_markdown() {
     // The world razes it.
     let mut razed = view.clone();
     razed.settlements.retain(|s| s.id != town.entity.id());
-    board.refresh(&Snapshot::read(&razed), &data.instruments, &market);
+    board.refresh(&Snapshot::read(&razed), &data.instruments, &market, 1);
 
     let struck = ledger.write_off_delisted(&board);
 

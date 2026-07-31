@@ -10,9 +10,11 @@
 //! - The [`Portfolio`] **is** saved, because it is the one thing here that no
 //!   world view can reconstruct.
 
+pub mod licences;
 pub mod portfolio;
 pub mod settlement;
 
+pub use licences::{LicenceError, LicenceTable, Licences};
 pub use portfolio::{OrderError, Portfolio, PortfolioSave};
 pub use settlement::SettlementRecord;
 
@@ -25,6 +27,7 @@ use crate::world::delta::WorldDelta;
 use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
 use macroquad_toolkit::rng::SeededRng;
+use macroquad_toolkit::series::Series;
 use mytherra_core::world::{EventKind, WorldEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,6 +64,10 @@ pub struct SaveData {
     /// the world on the next read.
     #[serde(default)]
     pub portfolio: PortfolioSave,
+    /// How far up the information ladder the broker has bought. Progression,
+    /// and the other thing no world view can reconstruct.
+    #[serde(default)]
+    pub licences: Licences,
 }
 
 /// The live session.
@@ -87,6 +94,14 @@ pub struct GameSession {
     chronicle: Vec<WorldEvent>,
     /// Which kind of chronicle line the reader is filtering to, if any.
     chronicle_filter: Option<EventKind>,
+    /// How far the broker has climbed the information ladder (GDD 5.3).
+    licences: Licences,
+    /// The era the world was in when last read, so a turning of the age can be
+    /// noticed rather than merely happening.
+    era: u32,
+    /// The broker's equity at each settlement — the curve the records screen
+    /// draws, and the one number that says whether any of this worked.
+    equity_curve: Series,
     /// The instrument class the research browser is showing.
     research_class: String,
     /// The listing the desk is looking at, if any.
@@ -118,6 +133,8 @@ pub enum Screen {
     Chronicle,
     /// Every entity the exchange watches, class by class.
     Research,
+    /// The equity curve, the licences, and the seeds behind the century.
+    Records,
 }
 
 /// Everything one reading of the world did.
@@ -125,6 +142,9 @@ pub enum Screen {
 pub struct Observed {
     pub board: BoardChange,
     pub books: SettlementBooks,
+    /// An age ended between this reading and the last. The largest event in the
+    /// game, and the one nothing could have priced (GDD 5.6).
+    pub cataclysm: bool,
 }
 
 /// What a settlement did to the ledger, as distinct from what it did to prices.
@@ -148,6 +168,9 @@ impl GameSession {
             screen: Screen::Floor,
             chronicle: Vec::new(),
             chronicle_filter: None,
+            licences: Licences::default(),
+            era: 0,
+            equity_curve: Series::new(market.history_capacity),
             research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
             selected: None,
             ticket_units: TICKET_STEP,
@@ -232,16 +255,25 @@ impl GameSession {
         &mut self,
         snapshot: Snapshot,
         turning: Option<&WorldDelta>,
+        era: u32,
         data: &GameData,
     ) -> Observed {
         let market = &data.config.market;
-        let board = self.board.refresh(&snapshot, &data.instruments, market);
+        let board = self
+            .board
+            .refresh(&snapshot, &data.instruments, market, era);
+
+        // An age ending is the largest, least-priceable event in the game
+        // (GDD 5.6). The exchange cannot see it coming; it can only notice that
+        // it has happened, and it must never do so twice.
+        let cataclysm = self.era != 0 && era != self.era;
+        self.era = era;
 
         let mut books = SettlementBooks::default();
         if let Some(delta) = turning {
             let shocks = data.impacts.shocks(delta, &snapshot);
             self.board
-                .settle(&shocks, &self.order_flow, market, &mut self.market_rng);
+                .settle(&shocks, &self.order_flow, market, era, &mut self.market_rng);
 
             // The floor forgets a large order gradually. Decaying after settling
             // rather than before means the year in which an order was struck is
@@ -261,10 +293,9 @@ impl GameSession {
             // after the two steps above have run.
             self.last_tick = delta.to_tick;
             self.observed += 1;
-            self.settlements.insert(
-                0,
-                SettlementRecord::from_delta(delta, &board, movers(&self.board)),
-            );
+            let mut record = SettlementRecord::from_delta(delta, &board, movers(&self.board));
+            record.cataclysm = cataclysm;
+            self.settlements.insert(0, record);
             self.settlements.truncate(LOG_CAPACITY);
 
             // The chronicle is kept whole and separate from the settlement log:
@@ -274,10 +305,52 @@ impl GameSession {
                 self.chronicle.insert(0, event.clone());
             }
             self.chronicle.truncate(CHRONICLE_CAPACITY);
+
+            // One point per settlement, so the curve's x-axis is the world's
+            // clock and not the wall's.
+            self.equity_curve.push(self.portfolio.equity(&self.board));
         }
 
         self.snapshot = snapshot;
-        Observed { board, books }
+        Observed {
+            board,
+            books,
+            cataclysm,
+        }
+    }
+
+    /// The broker's equity at every settlement observed.
+    pub fn equity_curve(&self) -> &Series {
+        &self.equity_curve
+    }
+
+    pub fn licences(&self) -> Licences {
+        self.licences
+    }
+
+    /// Whether this broker may trade a class at all (GDD 5.3).
+    pub fn licensed_for(&self, class: &str, table: &LicenceTable) -> bool {
+        table.permits(self.licences.held, class)
+    }
+
+    /// Buy the next rung of the ladder.
+    ///
+    /// Paid for out of the same cash that buys paper, which is the whole
+    /// tension of Pillar 3: every crown spent on seeing further is a crown not
+    /// invested, and a broker who buys sight too early starves.
+    pub fn buy_licence(&mut self, table: &LicenceTable) -> Result<String, LicenceError> {
+        let Some(next) = table.next(self.licences.held) else {
+            return Err(LicenceError::Complete);
+        };
+        if next.cost > self.portfolio.cash {
+            return Err(LicenceError::Insufficient {
+                need: next.cost,
+                have: self.portfolio.cash,
+            });
+        }
+        self.portfolio.cash -= next.cost;
+        self.licences.held += 1;
+        Ok(next.name.clone())
     }
 
     /// The chronicle as read so far, newest first. Prose, and nothing that
@@ -365,6 +438,7 @@ impl GameSession {
             last_tick: self.last_tick,
             market_state: self.market_rng.state(),
             portfolio: self.portfolio.to_save(),
+            licences: self.licences,
         }
     }
 
@@ -382,6 +456,9 @@ impl GameSession {
             // poll, from the cursor this save carries.
             chronicle: Vec::new(),
             chronicle_filter: None,
+            licences: save.licences,
+            era: 0,
+            equity_curve: Series::new(market.history_capacity),
             research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
             // Flow is not saved: it decays to nothing within a few settlements
             // anyway, and a mark left on a price by an order struck before a
@@ -425,6 +502,7 @@ pub fn migrate_save_value(
         last_tick: 0,
         market_state: 0,
         portfolio: PortfolioSave::default(),
+        licences: Licences::default(),
     })
 }
 

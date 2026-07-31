@@ -2,12 +2,14 @@
 
 use crate::market::orders::OrderConfig;
 use crate::market::{ImpactTable, InstrumentRules, MarketConfig};
+use crate::state::LicenceTable;
 use macroquad_toolkit::data_loader::load_embedded_json_labeled;
 use serde::{Deserialize, Serialize};
 
 const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
 const INSTRUMENTS_JSON: &str = include_str!("../assets/data/instruments.json");
 const IMPACTS_JSON: &str = include_str!("../assets/data/impacts.json");
+const LICENCES_JSON: &str = include_str!("../assets/data/licences.json");
 
 /// Where the exchange reads its world, and how often (GDD 5.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +104,8 @@ pub struct GameData {
     pub instruments: InstrumentRules,
     /// The state-delta → price-shock table (GDD 5.5).
     pub impacts: ImpactTable,
+    /// The information ladder (GDD 5.3).
+    pub licences: LicenceTable,
 }
 
 impl GameData {
@@ -118,10 +122,15 @@ impl GameData {
         // exactly like a balance value someone deliberately set to zero.
         impacts.validate()?;
 
+        let licences: LicenceTable = load_embedded_json_labeled("licences", LICENCES_JSON)?;
+        // A class no licence unlocks would be paper nobody could ever reach.
+        licences.validate()?;
+
         Ok(Self {
             config: load_embedded_json_labeled("game_config", GAME_CONFIG_JSON)?,
             instruments,
             impacts,
+            licences,
         })
     }
 }

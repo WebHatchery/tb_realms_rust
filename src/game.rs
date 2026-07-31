@@ -189,6 +189,7 @@ impl Game {
             }
             ("chronicle", _) => self.session.show(Screen::Chronicle),
             ("research", _) => self.session.show(Screen::Research),
+            ("records", _) => self.session.show(Screen::Records),
             _ => {}
         }
         self.pending_scene = None;
@@ -236,9 +237,18 @@ impl Game {
 
         // The world's own back-issues, if this is the first view to arrive.
         let archive = view.chronicle.clone();
+        let era = view.era.number;
+        let era_name = view.era.name.clone();
         let snapshot = Snapshot::read(view);
         self.session.seed_chronicle(&archive);
-        let observed = self.session.observe(snapshot, turning, &self.data);
+        let observed = self.session.observe(snapshot, turning, era, &self.data);
+
+        // An age ending is the largest event in the game and the one nothing
+        // could have priced. It gets said in the loudest voice the desk has.
+        if observed.cataclysm {
+            self.notifications
+                .danger(format!("The age turns. {era_name} begins."));
+        }
 
         if observed.books.income > 0.0 {
             self.notifications
@@ -267,8 +277,19 @@ impl Game {
             UiAction::Show(screen) => self.session.show(screen),
             UiAction::FilterChronicle(kind) => self.session.filter_chronicle(kind),
             UiAction::Research(class) => self.session.research(class),
+            UiAction::BuyLicence => self.buy_licence(),
             UiAction::ResizeTicket(by) => self.session.resize_ticket(by),
             UiAction::Order(side) => self.place_order(side),
+        }
+    }
+
+    /// Climb one rung of the information ladder (GDD 5.3).
+    fn buy_licence(&mut self) {
+        match self.session.buy_licence(&self.data.licences) {
+            Ok(name) => self
+                .notifications
+                .success(format!("Licensed: {name}. The board widens.")),
+            Err(err) => self.notifications.warning(err.label()),
         }
     }
 

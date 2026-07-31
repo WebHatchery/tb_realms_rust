@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Broker licences: the information tiers of GDD 5.3, and the game's real",
+    "progression axis (Pillar 3). Capital is not the axis - a rich broker with",
+    "poor information should lose to a poorer one who can see further.",
+    "",
+    "Tiers are cumulative and bought in order: holding one means holding every",
+    "tier beneath it. Each unlocks instrument classes to trade and research, and",
+    "names the Mytherra VisibilityScope it corresponds to.",
+    "",
+    "About those scopes, honestly: the spectator projection this game reads",
+    "already carries every scope, so a licence cannot make the exchange unsee",
+    "what the server sent. The gate is the exchange's own - it decides what a",
+    "broker of this rank is shown and permitted to trade. The scopes are named",
+    "anyway because they are the vocabulary the tiers were designed against, and",
+    "because a Solo world source would be able to enforce them for real.",
+    "",
+    "Every listing class must appear under exactly one tier, or paper would exist",
+    "that no licence could ever reach.",
+    "",
+    "Costs rise far faster than the classes they unlock are worth, which is the",
+    "point: buying sight is meant to hurt."
+  ],
+  "tiers": [
+    {
+      "id": "floor_runner",
+      "name": "Floor runner",
+      "cost": 0,
+      "scopes": [],
+      "classes": ["commodity", "route_toll"],
+      "reveals": "the tide, never the boat",
+      "blurb": "Grain, ore and the tolls on the roads between. You may not ask whose roads."
+    },
+    {
+      "id": "chartered_broker",
+      "name": "Chartered broker",
+      "cost": 3000,
+      "scopes": ["regions", "settlements"],
+      "classes": ["regional_bond", "settlement_share"],
+      "reveals": "provinces and the towns inside them",
+      "blurb": "The granaries have names now, and so do the famines."
+    },
+    {
+      "id": "guild_factor",
+      "name": "Guild factor",
+      "cost": 9000,
+      "scopes": ["heroes"],
+      "classes": ["house_scrip", "order_charter"],
+      "reveals": "bloodlines and fellowships",
+      "blurb": "The highest-alpha paper on the floor, and the quickest to die out."
+    },
+    {
+      "id": "archivist",
+      "name": "Archivist",
+      "cost": 25000,
+      "scopes": ["full_chronicle", "eras", "divine_tools"],
+      "classes": ["relic_lot"],
+      "reveals": "the whole chronicle, the ages that ended, and the relics",
+      "blurb": "You may read how the last age ended. It will not tell you when this one does."
+    }
+  ]
+}

@@ -58,7 +58,13 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     draw_heading(ctx, listing, mouse, actions);
 
     let plot = Rect::new(PAGE.x + 20.0, PAGE.y + 96.0, PAGE.w - 380.0, 300.0);
-    chart::draw(plot, &listing.history, &listing.fair_history, crowns);
+    chart::draw(
+        plot,
+        &listing.history,
+        &listing.fair_history,
+        Some(&listing.era_history),
+        crowns,
+    );
 
     draw_decomposition(
         listing,

@@ -19,6 +19,13 @@ use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::draw_ui_text_ex;
 use mytherra_core::world::{EventKind, WorldEvent};
 
+/// How far back a broker without an Archivist's licence may read.
+///
+/// The same depth Mytherra's own projection grants a client without
+/// `FullChronicle`, so the gate matches the world's own idea of what is recent
+/// rather than inventing a second number.
+const SHALLOW_CHRONICLE: usize = 32;
+
 const PAGE: Rect = Rect {
     x: 18.0,
     y: 104.0,
@@ -49,11 +56,23 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
 
     draw_filters(ctx, mouse, actions);
 
+    // What an Archivist buys is *history* — the one thing on the ladder that is
+    // not an instrument class. Without that rung the chronicle is readable only
+    // as far back as the world itself hands to a low-tier client, which is the
+    // same depth Mytherra's own projection grants.
+    let archivist = ctx.data.licences.is_archivist(ctx.session.licences().held);
+    let depth = if archivist {
+        usize::MAX
+    } else {
+        SHALLOW_CHRONICLE
+    };
+
     let filter = ctx.session.chronicle_filter();
     let lines: Vec<&WorldEvent> = ctx
         .session
         .chronicle()
         .iter()
+        .take(depth)
         .filter(|event| filter.is_none_or(|kind| event.kind == kind))
         .collect();
 
@@ -69,6 +88,22 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
             TextStyle::new(15.0, dark::TEXT_DIM).params(),
         );
         return;
+    }
+
+    if !archivist {
+        let withheld = ctx
+            .session
+            .chronicle()
+            .len()
+            .saturating_sub(SHALLOW_CHRONICLE);
+        if withheld > 0 {
+            draw_ui_text_ex(
+                &format!("{withheld} older lines are archive — an Archivist's licence reads them"),
+                PAGE.right() - 470.0,
+                PAGE.y + 78.0,
+                TextStyle::new(12.0, dark::TEXT_DIM).params(),
+            );
+        }
     }
 
     // Prose on the left, and what moved on the right, sharing a year.

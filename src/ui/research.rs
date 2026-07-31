@@ -57,6 +57,20 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     let chosen = ctx.session.research_class();
     draw_classes(ctx, chosen, mouse, actions);
 
+    // A class the licence does not reach shows its count but not its contents:
+    // a broker may know how much they are missing, never what it says.
+    let held = ctx.session.licences().held;
+    let licensed = chosen == "resource_node" || ctx.data.licences.permits(held, chosen);
+    if !licensed {
+        draw_ui_text_ex(
+            "your licence does not reach this class — the ledger buys sight on the records screen",
+            PAGE.x + 192.0,
+            PAGE.y + 104.0,
+            TextStyle::new(14.0, dark::TEXT_DIM).params(),
+        );
+        return;
+    }
+
     // The entities of the chosen class, as the last reading of the world has
     // them. `resource_node` is the one key with no listing class behind it.
     let mut rows: Vec<&Fundamentals> = ctx

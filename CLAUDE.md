@@ -16,11 +16,11 @@ turns a reading into a `Board` of listings with fair values; `src/market/impact.
 typed deltas into shocks; `src/market/pricing.rs` moves each price by drift + shock + noise +
 flow; `src/market/orders.rs` prices an order including its own market impact; and
 `src/state/portfolio.rs` is the ledger. A century can be traded headlessly, and `src/ui/`
-carries four screens: the floor (board, ledger, movers, settlements, desk with an order
+carries five screens: the floor (board, ledger, movers, settlements, desk with an order
 ticket), a listing's own page (chart, fundamentals, price-move decomposition), the chronicle,
-and the research browser. What remains is **M5**: information licences gated on
-`VisibilityScope`, era transitions and cataclysms, and the records archive. `gdd.md` is the
-specification and the source of truth.
+the research browser, and the records (equity curve, the licence ladder, the seeds). What
+remains is **M7 polish**: achievements, audio, accessibility, and a balance pass. `gdd.md` is
+the specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -55,7 +55,7 @@ cargo clippy --all-targets --all-features -- -D warnings   # CI treats warnings 
 cargo build --release --target wasm32-unknown-unknown      # WebGL
 
 .\publish.ps1                                              # build Windows + WebGL, deploy (the sanctioned validation path)
-.\scripts\capture_ui.ps1 -Scenes boards,trading,listing    # headless screenshots -> docs/verification/
+.\scripts\capture_ui.ps1 -Scenes boards,trading,listing,chronicle,research,records
 ```
 
 The two `#[ignore]`d tests in `src/world/live/tests.rs` are the only ones needing a server;
@@ -171,6 +171,26 @@ what a broker is actually trading; the scale spans both series, or fair value wo
 plot exactly when it diverged, which is when the chart matters most. The approach is taken from
 `dragons_hoard/src/ui/history.rs`, which solved it first — don't re-derive it.
 
+### Licences and ages (GDD 5.3, 5.6)
+
+`assets/data/licences.json` is the information ladder — the game's real progression axis, since
+**information is what you spend on, not capital** (Pillar 3). Four cumulative rungs; the first
+is free; every listing class must appear under exactly one rung or paper would exist no licence
+could reach. Buying a rung spends the same cash that buys paper, which is the whole tension.
+
+**An honest note on the gate.** GDD §5.3 maps the tiers onto Mytherra's `VisibilityScope`, and
+they are named against it — but the spectator projection already carries *every* scope (that is
+what makes the endpoint safe), so a licence cannot make the exchange unsee what the server sent.
+The gate is the exchange's own: it decides what a broker of this rank is shown and may trade.
+A Solo world source could enforce the scopes for real, and the tiers are shaped so it would slot
+in without redesign. Don't let the doc comments imply a server-side filter that isn't there.
+
+**An age ending is detected, never predicted.** `EraState.number` changing between readings is
+the only signal; `Observed.cataclysm` reports it, and the session guards against noticing the
+same one twice. `Instrument::era_history` is a **third `Series`**, decimated in step with price
+and fair value, so the chart can rule off where an age ended: a bucket whose min and max differ
+is a bucket an era turned inside. A list of boundary years could not have survived decimation.
+
 ## Configuration
 
 `assets/data/game_config.json` is embedded at compile time via `include_str!` in
@@ -232,7 +252,7 @@ settlements. `OrderConfig::depth(liquidity)` is where GDD §5.2's promise that r
 and the execution, deliberately: two code paths there would be a way to lie to the player
 about their own costs.
 
-Still planned per GDD §6: `licences.json`, `achievements.json`, `strings.json`.
+Still planned per GDD §6: `achievements.json`, `strings.json`.
 
 **`impacts.json` is the balance surface of the entire game and must never become Rust
 constants** — it is where a designer tunes how hard a famine hits grain. `Field::key()` is
@@ -250,7 +270,7 @@ until the board is non-empty, because every screen here is downstream of the wor
 Scenes: `boards` (anything unrecognised) shows the opening state; **`trading` selects the
 deepest listing and buys it**, so one screenshot covers the ticket, the fill, the tape and a
 real position in the ledger — the whole order path, which no static scene shows; `listing`
-does the same and then opens that listing's page; `chronicle` and `research` open those.
+does the same and then opens that listing's page; `chronicle`, `research` and `records` open those.
 
 A capture runs in about a second of wall-clock, while the server ticks every ten, so a
 captured frame will normally show a full board but **zero settlements observed**. That is

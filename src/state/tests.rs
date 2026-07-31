@@ -42,7 +42,12 @@ fn settlements_are_logged_newest_first_and_bounded() {
     // An empty reading of the world: this test is about the log, and an
     // empty board keeps the settling out of its way.
     for year in 1..=(LOG_CAPACITY as u32 + 10) {
-        session.observe(Snapshot::default(), Some(&delta(year, year as u64)), &data);
+        session.observe(
+            Snapshot::default(),
+            Some(&delta(year, year as u64)),
+            1,
+            &data,
+        );
     }
 
     assert_eq!(
@@ -64,7 +69,7 @@ fn settlements_are_logged_newest_first_and_bounded() {
 #[test]
 fn a_save_round_trips_the_cursor_and_tick() {
     let mut session = GameSession::new(&market(), &orders());
-    session.observe(Snapshot::default(), Some(&delta(341, 17)), &data());
+    session.observe(Snapshot::default(), Some(&delta(341, 17)), 1, &data());
 
     let save = session.to_save("0.1.0", 4_212);
     let resumed = GameSession::from_save(&save, &market(), &orders());
@@ -83,7 +88,7 @@ fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
     let view = world();
 
     let mut session = GameSession::new(&market(), &orders());
-    let opening = session.observe(Snapshot::read(&view), None, &data).board;
+    let opening = session.observe(Snapshot::read(&view), None, 1, &data).board;
 
     assert!(!session.board().is_empty(), "the world hangs the board");
     assert_eq!(opening.listed.len(), session.board().len());
@@ -98,7 +103,7 @@ fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
     let lost = razed.settlements.remove(0);
     let turning = delta(razed.year + 1, 2);
     let change = session
-        .observe(Snapshot::read(&razed), Some(&turning), &data)
+        .observe(Snapshot::read(&razed), Some(&turning), 1, &data)
         .board;
 
     assert_eq!(change.delisted.len(), 1);
@@ -157,7 +162,7 @@ fn a_turning_adds_its_prose_newest_first_and_the_run_stays_bounded() {
                 message: format!("and then the last thing in {year}"),
             },
         ];
-        session.observe(Snapshot::default(), Some(&turning), &data);
+        session.observe(Snapshot::default(), Some(&turning), 1, &data);
     }
 
     assert_eq!(session.chronicle().len(), CHRONICLE_CAPACITY);
@@ -177,7 +182,7 @@ fn a_settlement_records_what_actually_moved_beside_the_prose() {
     let data = data();
     let view = world();
     let mut session = GameSession::new(&market(), &orders());
-    session.observe(Snapshot::read(&view), None, &data);
+    session.observe(Snapshot::read(&view), None, 1, &data);
 
     // A year in which one province's fortunes collapse.
     let mut struck = view.clone();
@@ -192,7 +197,7 @@ fn a_settlement_records_what_actually_moved_beside_the_prose() {
         kind: EventKind::Region,
         message: "a grand and mythic sentence about something else".to_owned(),
     }];
-    session.observe(after, Some(&turning), &data);
+    session.observe(after, Some(&turning), 1, &data);
 
     let record = &session.settlements()[0];
     assert!(!record.movers.is_empty(), "the floor moved on the news");
@@ -245,4 +250,121 @@ fn a_current_save_survives_migration_with_its_cursor_intact() {
     assert_eq!(migrated.version, "0.2.0", "stamped to the current version");
     assert_eq!(migrated.cursor, 918, "the cursor is not lost");
     assert_eq!(migrated.last_tick, 16_290);
+}
+
+#[test]
+fn an_age_ending_is_noticed_once_and_marks_the_settlement() {
+    // The largest event in the game and the one nothing could have priced
+    // (GDD 5.6). The exchange cannot see it coming — only notice it has
+    // happened, and it must never notice the same one twice.
+    let data = data();
+    let view = world();
+    let mut session = GameSession::new(&market(), &orders());
+
+    // The first reading establishes the age; it is not itself a turning of one.
+    let opening = session.observe(Snapshot::read(&view), None, 4, &data);
+    assert!(!opening.cataclysm, "the first age read is not a new age");
+
+    let quiet = delta(view.year + 1, 2);
+    let same = session.observe(Snapshot::read(&view), Some(&quiet), 4, &data);
+    assert!(!same.cataclysm);
+    assert!(!session.settlements()[0].cataclysm);
+
+    let turning = delta(view.year + 2, 3);
+    let ended = session.observe(Snapshot::read(&view), Some(&turning), 5, &data);
+    assert!(ended.cataclysm, "the age turned");
+    assert!(session.settlements()[0].cataclysm);
+
+    // And the next year in the new age is an ordinary year again.
+    let after = delta(view.year + 3, 4);
+    assert!(
+        !session
+            .observe(Snapshot::read(&view), Some(&after), 5, &data)
+            .cataclysm
+    );
+}
+
+#[test]
+fn the_chart_can_tell_which_ages_a_listing_lived_through() {
+    // The era series is what lets the chart rule off where an age ended, and it
+    // has to survive decimation with the price beside it.
+    let data = data();
+    let view = world();
+    let mut session = GameSession::new(&market(), &orders());
+    session.observe(Snapshot::read(&view), None, 7, &data);
+
+    for year in 1..=40u32 {
+        let era = if year < 20 { 7 } else { 8 };
+        session.observe(
+            Snapshot::read(&view),
+            Some(&delta(view.year + year, year as u64)),
+            era,
+            &data,
+        );
+    }
+
+    let listing = session.board().listings().next().expect("paper is listed");
+    assert_eq!(listing.era_history.min(), Some(7.0));
+    assert_eq!(listing.era_history.max(), Some(8.0));
+    assert_eq!(
+        listing.era_history.len(),
+        listing.history.len(),
+        "the era series must stay aligned with the price it rules off"
+    );
+}
+
+#[test]
+fn a_licence_is_bought_with_the_same_cash_that_buys_paper() {
+    // Pillar 3's whole tension: every crown spent on seeing further is a crown
+    // not invested.
+    let data = data();
+    let mut session = GameSession::new(&market(), &orders());
+    let opening = session.portfolio().cash;
+
+    let next = data.licences.next(0).expect("the ladder has a second rung");
+    let cost = next.cost;
+    let name = session.buy_licence(&data.licences).expect("affordable");
+
+    assert_eq!(name, next.name);
+    assert_eq!(session.licences().held, 1);
+    assert_eq!(session.portfolio().cash, opening - cost);
+    // And the board widens: a class that was beyond reach now is not.
+    assert!(session.licensed_for("regional_bond", &data.licences));
+    assert!(!session.licensed_for("house_scrip", &data.licences));
+}
+
+#[test]
+fn a_licence_beyond_the_ledger_is_refused_without_spending_anything() {
+    let data = data();
+    let mut session = GameSession::new(&market(), &orders());
+    session.buy_licence(&data.licences).unwrap();
+    // Drain the ledger, then try to climb again.
+    let cash = session.portfolio().cash;
+    session.portfolio.cash = 1.0;
+
+    let refused = session.buy_licence(&data.licences).unwrap_err();
+
+    assert!(
+        matches!(refused, LicenceError::Insufficient { .. }),
+        "{refused:?}"
+    );
+    assert_eq!(session.licences().held, 1, "and the rung was not climbed");
+    assert_eq!(session.portfolio().cash, 1.0);
+    let _ = cash;
+}
+
+#[test]
+fn licences_survive_a_save() {
+    let data = data();
+    let mut session = GameSession::new(&market(), &orders());
+    // Two rungs cost more than a broker opens with, deliberately — buying sight
+    // is meant to hurt — so this fixture states its own wealth.
+    session.portfolio.cash = 100_000.0;
+    session.buy_licence(&data.licences).unwrap();
+    session.buy_licence(&data.licences).unwrap();
+
+    let resumed = GameSession::from_save(&session.to_save("0.1.0", 0), &market(), &orders());
+
+    assert_eq!(resumed.licences().held, 2);
+    assert!(resumed.licensed_for("house_scrip", &data.licences));
 }

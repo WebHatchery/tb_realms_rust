@@ -59,7 +59,7 @@ fn run_century(years: u32, world_seed: u64) -> BTreeMap<String, f32> {
 
     let mut view = base();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market, 1);
 
     let no_flow = BTreeMap::new();
     for _ in 0..years {
@@ -67,9 +67,9 @@ fn run_century(years: u32, world_seed: u64) -> BTreeMap<String, f32> {
         let snapshot = Snapshot::read(&next);
         let delta = diff(&view, &next);
 
-        board.refresh(&snapshot, &data.instruments, market);
+        board.refresh(&snapshot, &data.instruments, market, 1);
         let shocks = data.impacts.shocks(&delta, &snapshot);
-        board.settle(&shocks, &no_flow, market, &mut market_rng);
+        board.settle(&shocks, &no_flow, market, 1, &mut market_rng);
 
         view = next;
     }
@@ -89,7 +89,7 @@ fn a_century_of_settlements_runs_headlessly_and_leaves_every_price_sane() {
 
     let mut view = base();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market, 1);
     let opening = board.len();
     assert!(opening > 40, "a world of substance opens the board");
 
@@ -99,11 +99,12 @@ fn a_century_of_settlements_runs_headlessly_and_leaves_every_price_sane() {
         let next = turn(&view, &mut world_rng);
         let snapshot = Snapshot::read(&next);
         let delta = diff(&view, &next);
-        board.refresh(&snapshot, &data.instruments, market);
+        board.refresh(&snapshot, &data.instruments, market, 1);
         board.settle(
             &data.impacts.shocks(&delta, &snapshot),
             &no_flow,
             market,
+            1,
             &mut market_rng,
         );
         if board.listings().any(|l| l.last_move.change() != 0.0) {
@@ -172,7 +173,7 @@ fn the_history_keeps_the_spike_that_mattered() {
 
     let mut view = base();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market, 1);
 
     let no_flow = BTreeMap::new();
     let mut peaks: BTreeMap<String, f32> = BTreeMap::new();
@@ -180,11 +181,12 @@ fn the_history_keeps_the_spike_that_mattered() {
         let next = turn(&view, &mut world_rng);
         let snapshot = Snapshot::read(&next);
         let delta = diff(&view, &next);
-        board.refresh(&snapshot, &data.instruments, market);
+        board.refresh(&snapshot, &data.instruments, market, 1);
         board.settle(
             &data.impacts.shocks(&delta, &snapshot),
             &no_flow,
             market,
+            1,
             &mut market_rng,
         );
         for listing in board.listings() {
@@ -250,7 +252,7 @@ fn the_live_world_moves_prices_when_it_turns() {
             break;
         }
         if let Some(view) = world.view() {
-            board.refresh(&Snapshot::read(view), &data.instruments, market);
+            board.refresh(&Snapshot::read(view), &data.instruments, market, 1);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -258,9 +260,9 @@ fn the_live_world_moves_prices_when_it_turns() {
     let view = world.view().expect("a world is in hand");
 
     let snapshot = Snapshot::read(view);
-    board.refresh(&snapshot, &data.instruments, market);
+    board.refresh(&snapshot, &data.instruments, market, 1);
     let shocks = data.impacts.shocks(&delta, &snapshot);
-    board.settle(&shocks, &no_flow, market, &mut market_rng);
+    board.settle(&shocks, &no_flow, market, 1, &mut market_rng);
 
     println!(
         "year {}: {} listings, {} shocked",
@@ -329,7 +331,7 @@ fn backtest(years: u32, world_seed: u64) -> Vec<f32> {
     let mut view = base();
     let mut board = Board::new();
     let mut ledger = Portfolio::new(orders);
-    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market, 1);
 
     let mut flow: BTreeMap<EntityRef, f32> = BTreeMap::new();
     let mut curve = Vec::new();
@@ -338,11 +340,12 @@ fn backtest(years: u32, world_seed: u64) -> Vec<f32> {
         let next = turn(&view, &mut world_rng);
         let snapshot = Snapshot::read(&next);
         let delta = diff(&view, &next);
-        board.refresh(&snapshot, &data.instruments, market);
+        board.refresh(&snapshot, &data.instruments, market, 1);
         board.settle(
             &data.impacts.shocks(&delta, &snapshot),
             &flow,
             market,
+            1,
             &mut market_rng,
         );
         for mark in flow.values_mut() {
@@ -444,17 +447,18 @@ fn price_and_fair_value_histories_stay_in_step_across_a_century() {
 
     let mut view = base();
     let mut board = Board::new();
-    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+    board.refresh(&Snapshot::read(&view), &data.instruments, market, 1);
 
     for _ in 0..400 {
         let next = turn(&view, &mut world_rng);
         let snapshot = Snapshot::read(&next);
         let delta = diff(&view, &next);
-        board.refresh(&snapshot, &data.instruments, market);
+        board.refresh(&snapshot, &data.instruments, market, 1);
         board.settle(
             &data.impacts.shocks(&delta, &snapshot),
             &no_flow,
             market,
+            1,
             &mut market_rng,
         );
         view = next;

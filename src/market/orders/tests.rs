@@ -19,6 +19,8 @@ fn listing(price: f32, liquidity: f32) -> Instrument {
     history.push(price);
     let mut fair_history = Series::new(64);
     fair_history.push(price);
+    let mut era_history = Series::new(64);
+    era_history.push(1.0);
     Instrument {
         symbol: "TEST".to_owned(),
         name: "A Test Claim".to_owned(),
@@ -32,6 +34,7 @@ fn listing(price: f32, liquidity: f32) -> Instrument {
         liquidity,
         history,
         fair_history,
+        era_history,
         last_move: PriceMove::unmoved(price),
         listed_year: 1,
     }

@@ -37,6 +37,10 @@ pub struct SettlementRecord {
     /// What actually moved that year, largest first — the numbers to read the
     /// prose against.
     pub movers: Vec<Mover>,
+    /// An age ended in this settlement. Set by the session, which is the only
+    /// thing that knows what era the previous reading was in.
+    #[serde(default)]
+    pub cataclysm: bool,
 }
 
 /// How many appearances/disappearances a single record names before it stops.
@@ -139,6 +143,7 @@ impl SettlementRecord {
             top_moves,
             headline: delta.events.last().map(|event| event.message.clone()),
             movers,
+            cataclysm: false,
         }
     }
 }

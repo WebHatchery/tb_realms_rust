@@ -56,7 +56,13 @@ fn range(price: &Series, fair: &Series) -> (f32, f32) {
 ///
 /// `label` formats a value for the axis, so a caller can decide how many
 /// decimals a price of 3 crowns and a price of 1,400 each deserve.
-pub fn draw(plot: Rect, price: &Series, fair: &Series, label: impl Fn(f32) -> String) {
+pub fn draw(
+    plot: Rect,
+    price: &Series,
+    fair: &Series,
+    eras: Option<&Series>,
+    label: impl Fn(f32) -> String,
+) {
     draw_surface(
         plot,
         &SurfaceStyle::new(Color::new(0.05, 0.055, 0.07, 1.0)).with_border(1.0, dark::ACCENT),
@@ -99,6 +105,27 @@ pub fn draw(plot: Rect, price: &Series, fair: &Series, label: impl Fn(f32) -> St
 
     let buckets = price.buckets();
     let step = (plot.w - 58.0) / buckets.len().max(1) as f32;
+
+    // Where the ages ended. A bucket whose era number is not constant is one an
+    // era turned inside — which survives however many times the century has been
+    // decimated, because the era series is squeezed in step with the price.
+    // A list of boundary years could not have survived that squeeze.
+    if let Some(eras) = eras {
+        for (index, bucket) in eras.buckets().iter().enumerate() {
+            if bucket.min >= bucket.max {
+                continue;
+            }
+            let x = plot.x + index as f32 * step + step * 0.5;
+            draw_line(
+                x,
+                plot.y,
+                x,
+                plot.bottom(),
+                1.0,
+                Color::new(0.86, 0.50, 0.42, 0.55),
+            );
+        }
+    }
 
     // The traded range, as a band.
     for (index, bucket) in buckets.iter().enumerate() {
@@ -157,6 +184,17 @@ pub fn draw(plot: Rect, price: &Series, fair: &Series, label: impl Fn(f32) -> St
 
     // What one bucket covers, because a chart that has been decimated is
     // telling the truth at a coarser resolution and should say so.
+    let ages = eras
+        .and_then(|eras| Some(eras.max()? - eras.min()?))
+        .unwrap_or(0.0) as u32;
+    if ages > 0 {
+        draw_ui_text_ex(
+            &format!("{ages} age(s) ended"),
+            plot.x + 8.0,
+            plot.y + 14.0,
+            TextStyle::new(11.0, Color::new(0.86, 0.50, 0.42, 1.0)).params(),
+        );
+    }
     let covered = price.resolution();
     let legend = if covered > 1 {
         format!(

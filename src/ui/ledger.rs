@@ -14,6 +14,15 @@ pub fn draw(ctx: &UiContext<'_>) {
     let rect = LEDGER;
     panel(rect, "The ledger");
 
+    // The rank the broker trades at, named where they will see it most often.
+    let rank = ctx.data.licences.current(ctx.session.licences().held);
+    draw_ui_text_ex(
+        &rank.name,
+        rect.right() - 130.0,
+        rect.y + 26.0,
+        TextStyle::new(13.0, dark::TEXT_DIM).params(),
+    );
+
     let portfolio = ctx.session.portfolio();
     let board = ctx.session.board();
     let equity = portfolio.equity(board);

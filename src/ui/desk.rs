@@ -99,6 +99,27 @@ fn draw_ticket(ctx: &UiContext<'_>, desk: Rect, mouse: Vec2, actions: &mut Vec<U
         return;
     };
 
+    // A ticket for paper this licence does not cover is refused before it is
+    // priced, so a broker is never quoted something they cannot buy. It can
+    // happen: a selection made under a licence outlives nothing, but the world
+    // can also re-list an entity into a class the broker has no rank for.
+    let permitted = listing
+        .entity
+        .listing_class()
+        .is_some_and(|class| ctx.session.licensed_for(class, &ctx.data.licences));
+    if !permitted {
+        draw_ui_text_ex(
+            &format!(
+                "{} is beyond your licence — the ladder is on the records screen",
+                listing.symbol
+            ),
+            x,
+            desk.y + 54.0,
+            TextStyle::new(14.0, dark::TEXT_DIM).params(),
+        );
+        return;
+    }
+
     // What is held and what it cost — a broker deciding whether to add should
     // not have to look away from the ticket to see their own basis.
     let holding = match ctx.session.portfolio().position(&listing.entity) {

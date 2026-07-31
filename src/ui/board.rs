@@ -6,15 +6,30 @@
 
 use super::widgets::{direction, panel, signed_percent, truncate};
 use super::{UiAction, UiContext, BOARD};
+use crate::data::GameData;
 use crate::market::Instrument;
 use crate::state::GameSession;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::draw_ui_text_ex;
 
-/// The dearest listings first, which is the order a board is read in.
-fn ranked(session: &GameSession) -> Vec<&Instrument> {
-    let mut listings: Vec<&Instrument> = session.board().listings().collect();
+/// The dearest listings a broker of this rank may see, dearest first.
+///
+/// Paper outside the licence is not greyed out but *absent*: a broker who
+/// cannot trade a class should not be teased with its prices, because the whole
+/// point of the ladder is that information is the thing being bought (Pillar 3).
+fn ranked<'a>(session: &'a GameSession, data: &GameData) -> Vec<&'a Instrument> {
+    let held = session.licences().held;
+    let mut listings: Vec<&Instrument> = session
+        .board()
+        .listings()
+        .filter(|listing| {
+            listing
+                .entity
+                .listing_class()
+                .is_some_and(|class| data.licences.permits(held, class))
+        })
+        .collect();
     listings.sort_by(|a, b| b.fair_value.total_cmp(&a.fair_value));
     listings
 }
@@ -23,9 +38,14 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     let rect = BOARD;
     panel(rect, "The board");
 
-    if ctx.session.board().is_empty() {
+    let listings = ranked(ctx.session, ctx.data);
+    if listings.is_empty() {
         draw_ui_text_ex(
-            "no world in hand yet — nothing is listed",
+            if ctx.session.board().is_empty() {
+                "no world in hand yet — nothing is listed"
+            } else {
+                "your licence shows you nothing the world is currently offering"
+            },
             rect.x + 16.0,
             rect.y + 60.0,
             TextStyle::new(15.0, dark::TEXT_DIM).params(),
@@ -33,7 +53,6 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         return;
     }
 
-    let listings = ranked(ctx.session);
     let selected = ctx.session.selected().map(|listing| &listing.entity);
     let price_x = rect.right() - 214.0;
     let change_x = rect.right() - 156.0;
@@ -128,13 +147,19 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         y += 24.0;
     }
 
-    let listed = ctx.session.board().len();
+    let listed = listings.len();
     let hidden = listed.saturating_sub(rows);
-    let footer = if hidden > 0 {
-        format!("{listed} listings · {hidden} more below the fold")
-    } else {
-        format!("{listed} listings")
-    };
+    // What the licence is keeping from you, counted. Knowing how much you
+    // cannot see is itself information, and it is the sales pitch for the next
+    // rung of the ladder.
+    let unlicensed = ctx.session.board().len() - listed;
+    let mut footer = format!("{listed} listings");
+    if hidden > 0 {
+        footer.push_str(&format!(" · {hidden} below the fold"));
+    }
+    if unlicensed > 0 {
+        footer.push_str(&format!(" · {unlicensed} beyond your licence"));
+    }
     draw_ui_text_ex(
         &footer,
         rect.x + 16.0,

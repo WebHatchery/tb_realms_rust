@@ -154,6 +154,14 @@ pub struct Instrument {
     /// because they are decimated in step: the same bucket index covers the same
     /// years in both, which is what lets them be drawn on one pair of axes.
     pub fair_history: Series,
+    /// The world's era number over the same span, so the chart can rule off
+    /// where an age ended (GDD 9).
+    ///
+    /// A third series rather than a list of years because it decimates *with*
+    /// the other two: a bucket whose min and max differ is a bucket an era
+    /// turned inside, whatever resolution the century has been squeezed to. A
+    /// list of boundary years could not survive that squeeze.
+    pub era_history: Series,
     /// Why the price last moved, decomposed (GDD 5.4).
     pub last_move: PriceMove,
     /// The world year the listing first appeared.
@@ -221,6 +229,7 @@ impl Board {
         snapshot: &Snapshot,
         rules: &InstrumentRules,
         market: &MarketConfig,
+        era: u32,
     ) -> BoardChange {
         let mut change = BoardChange::default();
 
@@ -253,6 +262,8 @@ impl Board {
                     history.push(price);
                     let mut fair_history = Series::new(market.history_capacity);
                     fair_history.push(fair_value);
+                    let mut era_history = Series::new(market.history_capacity);
+                    era_history.push(era as f32);
                     self.listings.insert(
                         entry.entity.clone(),
                         Instrument {
@@ -268,6 +279,7 @@ impl Board {
                             liquidity: rule.liquidity,
                             history,
                             fair_history,
+                            era_history,
                             last_move: PriceMove::unmoved(price),
                             listed_year: snapshot.year,
                         },
@@ -302,6 +314,7 @@ impl Board {
         shocks: &BTreeMap<EntityRef, f32>,
         flow: &BTreeMap<EntityRef, f32>,
         market: &MarketConfig,
+        era: u32,
         rng: &mut SeededRng,
     ) {
         for (entity, listing) in &mut self.listings {
@@ -319,6 +332,7 @@ impl Board {
             listing.last_move = moved;
             listing.history.push(moved.to);
             listing.fair_history.push(listing.fair_value);
+            listing.era_history.push(era as f32);
         }
     }
 

@@ -1,0 +1,18 @@
+[
+  { "id": "first_ticket", "name": "First Blood on the Tape", "description": "Place your first order." },
+  { "id": "first_coupon", "name": "Clipping Coupons", "description": "Collect income from a position you held through a settlement." },
+  { "id": "round_trip", "name": "In and Out", "description": "Close a position at a profit, fees and slippage included." },
+  { "id": "patient_money", "name": "Patient Money", "description": "Hold a single position through ten settlements." },
+  { "id": "value_broker", "name": "The Value Broker", "description": "Buy paper trading more than a fifth under its fair value." },
+  { "id": "size_lesson", "name": "A Lesson in Size", "description": "Pay more than a tenth of an order's value in slippage." },
+  { "id": "chartered", "name": "Chartered", "description": "Buy the Chartered broker's licence." },
+  { "id": "guild_factor", "name": "Factor of the Guilds", "description": "Buy the Guild factor's licence." },
+  { "id": "archivist", "name": "The Archivist", "description": "Reach the top of the ladder and read the whole chronicle." },
+  { "id": "delisted", "name": "Paper and Ash", "description": "Hold a position in something the world stopped carrying." },
+  { "id": "age_witness", "name": "Witness to an Age", "description": "Watch an age end from the floor." },
+  { "id": "age_survivor", "name": "Solvent Through the Ending", "description": "Come out of an age's end with more than you opened with." },
+  { "id": "century", "name": "A Century on the Floor", "description": "Observe a hundred settlements." },
+  { "id": "doubled", "name": "Doubled", "description": "Grow the ledger to twice its opening capital." },
+  { "id": "diversified", "name": "The Spread Book", "description": "Hold positions in four instrument classes at once." },
+  { "id": "house_backer", "name": "Backer of Bloodlines", "description": "Hold house scrip through the death of one of its members." }
+]

@@ -18,9 +18,10 @@ flow; `src/market/orders.rs` prices an order including its own market impact; an
 `src/state/portfolio.rs` is the ledger. A century can be traded headlessly, and `src/ui/`
 carries five screens: the floor (board, ledger, movers, settlements, desk with an order
 ticket), a listing's own page (chart, fundamentals, price-move decomposition), the chronicle,
-the research browser, and the records (equity curve, the licence ladder, the seeds). What
-remains is **M7 polish**: achievements, audio, accessibility, and a balance pass. `gdd.md` is
-the specification and the source of truth.
+the research browser, and the records (equity curve, the licence ladder, honours, the seeds).
+`publish.ps1` runs clean end to end and the WebGL build has been verified in a browser.
+What remains is a **balance pass** (see *Known gaps*) and audio via `synth`. `gdd.md` is the
+specification and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -191,6 +192,24 @@ same one twice. `Instrument::era_history` is a **third `Series`**, decimated in 
 and fair value, so the chart can rule off where an age ended: a bucket whose min and max differ
 is a bucket an era turned inside. A list of boundary years could not have survived decimation.
 
+### Honours (GDD 5, M7)
+
+`state/honours.rs` decides every achievement in **one place**, from the session's own facts,
+run once per settlement and once per fill. Scattering unlocks across call sites is how the same
+honour gets awarded twice by two paths that each thought they owned it.
+
+Nothing pays out. The exchange notices and that is all — a reward would make honours a second
+progression axis competing with the licences, which are meant to be the only one (Pillar 3).
+
+### Keyboard
+
+Everything the mouse can do, a keyboard can: `1-4` for the screens, arrows to walk the board,
+`Enter` to open a listing, `B`/`X` to buy and sell, `[`/`]` to resize the ticket, `Esc` back.
+**There is deliberately no key to advance the world** — it turns on its own clock and nothing
+this game accepts can hurry it. `game_page.json` used to promise a "Space: advance the
+settlement" control that could never have existed; if a control is listed there, make sure it
+is real.
+
 ## Configuration
 
 `assets/data/game_config.json` is embedded at compile time via `include_str!` in
@@ -252,7 +271,7 @@ settlements. `OrderConfig::depth(liquidity)` is where GDD §5.2's promise that r
 and the execution, deliberately: two code paths there would be a way to lie to the player
 about their own costs.
 
-Still planned per GDD §6: `achievements.json`, `strings.json`.
+Still planned per GDD §6: `strings.json`.
 
 **`impacts.json` is the balance surface of the entire game and must never become Rust
 constants** — it is where a designer tunes how hard a famine hits grain. `Field::key()` is
@@ -288,7 +307,6 @@ hand-edit would survive exactly until the next sync. Change it there and re-sync
 
 ## Known gaps
 
-- No root `catalog_thumbnail.png` — CI warns, and `publish.ps1` deploys it for the catalog card.
 - No prices, orders, portfolio or charts (M2–M3). The board shows fair value, which is not a
   price and never will be.
 - **`instruments.json` is untuned against an old world.** The weights were set against a

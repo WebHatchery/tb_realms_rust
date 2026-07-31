@@ -76,7 +76,8 @@ impl Game {
                 }
             };
 
-        let session = GameSession::new(&data.config.market, &data.config.orders);
+        let mut session = GameSession::new(&data.config.market, &data.config.orders);
+        session.adopt_honours(data.achievements.clone());
         let mut game = Self {
             data,
             session,
@@ -125,20 +126,7 @@ impl Game {
             }
         }
 
-        if is_key_pressed(KeyCode::R) {
-            self.events.push(UiAction::ReadNow);
-        }
-        if is_key_pressed(KeyCode::S) {
-            self.events.push(UiAction::Save);
-        }
-        if is_key_pressed(KeyCode::L) {
-            self.events.push(UiAction::Load);
-        }
-        // Escape backs out of a listing, which is the one navigation a player
-        // should never have to hunt for a button to perform.
-        if is_key_pressed(KeyCode::Escape) {
-            self.events.push(UiAction::CloseListing);
-        }
+        self.read_keys();
 
         let actions: Vec<UiAction> = self.events.drain().collect();
         for action in actions {
@@ -260,6 +248,7 @@ impl Game {
             self.notifications
                 .danger(format!("{symbol} delisted — the position is a total loss"));
         }
+        self.announce(&observed.won);
         observed.board
     }
 
@@ -278,8 +267,87 @@ impl Game {
             UiAction::FilterChronicle(kind) => self.session.filter_chronicle(kind),
             UiAction::Research(class) => self.session.research(class),
             UiAction::BuyLicence => self.buy_licence(),
+            UiAction::StepSelection(rows) => self.session.step_selection(rows, &self.data.licences),
             UiAction::ResizeTicket(by) => self.session.resize_ticket(by),
             UiAction::Order(side) => self.place_order(side),
+        }
+    }
+
+    /// Every keyboard route through the exchange (GDD 13, M7 accessibility).
+    ///
+    /// Everything a mouse can do here, a keyboard can do too: the screens are
+    /// numbered, the board is walked with the arrows, and an order is one key.
+    /// There is deliberately **no key to advance the world** — the world turns
+    /// on its own clock and no input this game accepts can hurry it, which is
+    /// Pillar 5 and not an omission.
+    fn read_keys(&mut self) {
+        for (key, screen) in [
+            (KeyCode::Key1, Screen::Floor),
+            (KeyCode::Key2, Screen::Chronicle),
+            (KeyCode::Key3, Screen::Research),
+            (KeyCode::Key4, Screen::Records),
+        ] {
+            if is_key_pressed(key) {
+                self.events.push(UiAction::Show(screen));
+            }
+        }
+
+        // Walking the board with the arrows, which is the one interaction a
+        // mouse-only design would leave a keyboard player unable to perform.
+        if is_key_pressed(KeyCode::Down) {
+            self.events.push(UiAction::StepSelection(1));
+        }
+        if is_key_pressed(KeyCode::Up) {
+            self.events.push(UiAction::StepSelection(-1));
+        }
+        if is_key_pressed(KeyCode::Enter) {
+            if let Some(listing) = self.session.selected() {
+                let entity = listing.entity.clone();
+                self.events.push(UiAction::OpenListing(entity));
+            }
+        }
+
+        if is_key_pressed(KeyCode::B) {
+            self.events.push(UiAction::Order(Side::Buy));
+        }
+        // Sell is X rather than S, which is already the save key and was here
+        // first.
+        if is_key_pressed(KeyCode::X) {
+            self.events.push(UiAction::Order(Side::Sell));
+        }
+        if is_key_pressed(KeyCode::LeftBracket) {
+            self.events.push(UiAction::ResizeTicket(-10));
+        }
+        if is_key_pressed(KeyCode::RightBracket) {
+            self.events.push(UiAction::ResizeTicket(10));
+        }
+
+        if is_key_pressed(KeyCode::R) {
+            self.events.push(UiAction::ReadNow);
+        }
+        if is_key_pressed(KeyCode::S) {
+            self.events.push(UiAction::Save);
+        }
+        if is_key_pressed(KeyCode::L) {
+            self.events.push(UiAction::Load);
+        }
+        // Escape backs out of a listing, which is the one navigation a player
+        // should never have to hunt for a button to perform.
+        if is_key_pressed(KeyCode::Escape) {
+            self.events.push(UiAction::CloseListing);
+        }
+    }
+
+    /// Say what the exchange has noticed. The reward is the noticing.
+    fn announce(&mut self, won: &[String]) {
+        for id in won {
+            let name = self
+                .session
+                .honours()
+                .get(id)
+                .map(|honour| honour.name.clone())
+                .unwrap_or_else(|| id.clone());
+            self.notifications.success(format!("Noted: {name}"));
         }
     }
 
@@ -343,6 +411,9 @@ impl Game {
                     &self.data.config.market,
                     &self.data.config.orders,
                 );
+                // A save may predate an achievement, so the shipped definitions
+                // are re-adopted rather than trusted from the file.
+                self.session.adopt_honours(self.data.achievements.clone());
                 self.notifications.success("Ledger loaded");
                 self.refresh_save_state();
             }

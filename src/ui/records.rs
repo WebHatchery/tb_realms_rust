@@ -89,7 +89,60 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     }
 
     draw_ladder(ctx, mouse, actions);
-    draw_provenance(ctx, Rect::new(plot.x, plot.bottom() + 16.0, plot.w, 120.0));
+    draw_provenance(ctx, Rect::new(plot.x, plot.bottom() + 16.0, 400.0, 120.0));
+    draw_honours(
+        ctx,
+        Rect::new(plot.x + 420.0, plot.bottom() + 16.0, plot.w - 420.0, 120.0),
+    );
+}
+
+/// What the exchange has noticed. The reward is the noticing — an achievement
+/// that paid out would be a second progression axis competing with the licences,
+/// which are meant to be the only one (Pillar 3).
+fn draw_honours(ctx: &UiContext<'_>, rect: Rect) {
+    let honours = ctx.session.honours();
+    let (won, all) = honours.progress();
+    draw_ui_text_ex(
+        &format!("WHAT THE FLOOR HAS NOTICED  ·  {won} OF {all}"),
+        rect.x,
+        rect.y + 12.0,
+        TextStyle::new(11.0, dark::TEXT_DIM).params(),
+    );
+
+    // Won first, then the nearest few still open, so the column reads as a
+    // record rather than as a list of things not done.
+    let mut y = rect.y + 32.0;
+    let ordered = honours
+        .iter()
+        .filter(|honour| honour.unlocked)
+        .chain(honours.iter().filter(|honour| !honour.unlocked));
+    for honour in ordered {
+        let tint = if honour.unlocked {
+            dark::TEXT_BRIGHT
+        } else {
+            dark::TEXT_DIM
+        };
+        draw_ui_text_ex(
+            &format!(
+                "{}  {}",
+                if honour.unlocked { "[x]" } else { "[ ]" },
+                super::widgets::truncate(&honour.name, 30)
+            ),
+            rect.x,
+            y,
+            TextStyle::new(13.0, tint).params(),
+        );
+        draw_ui_text_ex(
+            &super::widgets::truncate(&honour.description, 52),
+            rect.x + 230.0,
+            y,
+            TextStyle::new(12.0, dark::TEXT_DIM).params(),
+        );
+        y += 17.0;
+        if y > rect.bottom() {
+            break;
+        }
+    }
 }
 
 /// The information ladder, and the rung the broker is standing on.

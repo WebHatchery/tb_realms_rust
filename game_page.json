@@ -2,7 +2,10 @@
   "title": "Tradeborn Realms",
   "wasm": "tb_realms",
   "roost_slug": "rust_tb_realms",
-  "status": { "text": "In Development", "class": "in-development" },
+  "status": {
+    "text": "In Development",
+    "class": "in-development"
+  },
   "canvas_rendering": "pixelated",
   "about": [
     "A fantasy securities market. You are a broker on the floor of the Tradeborn Exchange, buying and selling positions in noble houses, knightly orders, regions, trade routes, and the raw commodities of a living world.",
@@ -10,17 +13,59 @@
     "You cannot touch the world. You can only read it faster and better than the next broker. Positions settle on the world's clock, not yours — and a century-long era ends in a cataclysm that has never once been priced in correctly."
   ],
   "controls": [
-    { "key": "Mouse", "desc": "Select listings, place orders, scrub charts" },
-    { "key": "1-5", "desc": "Jump to floor / listing / portfolio / chronicle / records" },
-    { "key": "B / S", "desc": "Buy / sell the selected listing" },
-    { "key": "Space", "desc": "Advance to the next settlement" },
-    { "key": "Esc", "desc": "Pause menu" }
+    {
+      "key": "Mouse",
+      "desc": "Click a row to select it, then Buy or Sell on the desk"
+    },
+    {
+      "key": "1 - 4",
+      "desc": "Floor, chronicle, research, records"
+    },
+    {
+      "key": "Up / Down",
+      "desc": "Walk the board"
+    },
+    {
+      "key": "Enter",
+      "desc": "Open the selected listing's page"
+    },
+    {
+      "key": "B / X",
+      "desc": "Buy / sell the selected listing"
+    },
+    {
+      "key": "[ / ]",
+      "desc": "Smaller / larger order"
+    },
+    {
+      "key": "Esc",
+      "desc": "Back to the floor"
+    },
+    {
+      "key": "S / L / R",
+      "desc": "Save, load, read the world now"
+    }
   ],
   "details": [
-    { "label": "Genre", "value": "Trading / market simulation" },
-    { "label": "Engine", "value": "Macroquad + Toolkit" },
-    { "label": "Platform", "value": "Browser, Windows" },
-    { "label": "World", "value": "Reads the Mytherra simulation" },
-    { "label": "Ported from", "value": "game_apps/tb_realms (React + PHP)" }
+    {
+      "label": "Genre",
+      "value": "Trading / market simulation"
+    },
+    {
+      "label": "Engine",
+      "value": "Macroquad + Toolkit"
+    },
+    {
+      "label": "Platform",
+      "value": "Browser, Windows"
+    },
+    {
+      "label": "World",
+      "value": "Reads the Mytherra simulation"
+    },
+    {
+      "label": "Ported from",
+      "value": "game_apps/tb_realms (React + PHP)"
+    }
   ]
 }

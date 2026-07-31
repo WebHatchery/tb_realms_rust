@@ -64,6 +64,8 @@ pub enum UiAction {
     Research(String),
     /// Climb one rung of the information ladder (GDD 5.3).
     BuyLicence,
+    /// Move the board's selection by this many rows, for a keyboard.
+    StepSelection(i32),
     /// Change the ticket's size by this many units.
     ResizeTicket(i64),
     /// Place the ticket as it stands.

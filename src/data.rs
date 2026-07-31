@@ -3,13 +3,15 @@
 use crate::market::orders::OrderConfig;
 use crate::market::{ImpactTable, InstrumentRules, MarketConfig};
 use crate::state::LicenceTable;
-use macroquad_toolkit::data_loader::load_embedded_json_labeled;
+use macroquad_toolkit::achievements::Achievement;
+use macroquad_toolkit::data_loader::{load_embedded_json, load_embedded_json_labeled};
 use serde::{Deserialize, Serialize};
 
 const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
 const INSTRUMENTS_JSON: &str = include_str!("../assets/data/instruments.json");
 const IMPACTS_JSON: &str = include_str!("../assets/data/impacts.json");
 const LICENCES_JSON: &str = include_str!("../assets/data/licences.json");
+const ACHIEVEMENTS_JSON: &str = include_str!("../assets/data/achievements.json");
 
 /// Where the exchange reads its world, and how often (GDD 5.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +108,9 @@ pub struct GameData {
     pub impacts: ImpactTable,
     /// The information ladder (GDD 5.3).
     pub licences: LicenceTable,
+    /// What a broker can be noticed doing. Definitions only — what has actually
+    /// been won lives in the save.
+    pub achievements: Vec<Achievement>,
 }
 
 impl GameData {
@@ -126,11 +131,17 @@ impl GameData {
         // A class no licence unlocks would be paper nobody could ever reach.
         licences.validate()?;
 
+        let achievements: Vec<Achievement> = load_embedded_json(ACHIEVEMENTS_JSON)?;
+        if achievements.is_empty() {
+            return Err("achievements.json defines none".to_owned());
+        }
+
         Ok(Self {
             config: load_embedded_json_labeled("game_config", GAME_CONFIG_JSON)?,
             instruments,
             impacts,
             licences,
+            achievements,
         })
     }
 }

@@ -10,6 +10,7 @@
 //! - The [`Portfolio`] **is** saved, because it is the one thing here that no
 //!   world view can reconstruct.
 
+pub mod honours;
 pub mod licences;
 pub mod portfolio;
 pub mod settlement;
@@ -26,6 +27,7 @@ use crate::market::{Board, BoardChange, Instrument, MarketConfig};
 use crate::world::delta::WorldDelta;
 use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
+use macroquad_toolkit::achievements::Achievements;
 use macroquad_toolkit::rng::SeededRng;
 use macroquad_toolkit::series::Series;
 use mytherra_core::world::{EventKind, WorldEvent};
@@ -68,6 +70,9 @@ pub struct SaveData {
     /// and the other thing no world view can reconstruct.
     #[serde(default)]
     pub licences: Licences,
+    /// What the broker has been noticed doing.
+    #[serde(default)]
+    pub honours: Achievements,
 }
 
 /// The live session.
@@ -96,6 +101,13 @@ pub struct GameSession {
     chronicle_filter: Option<EventKind>,
     /// How far the broker has climbed the information ladder (GDD 5.3).
     licences: Licences,
+    /// What the broker has been noticed doing. No reward but the record: a
+    /// bonus here would compete with the licences, which are meant to be the
+    /// only progression axis (Pillar 3).
+    honours: Achievements,
+    /// How long each position has been held, in settlements, for the honours
+    /// that are about patience rather than profit.
+    held_for: BTreeMap<EntityRef, u32>,
     /// The era the world was in when last read, so a turning of the age can be
     /// noticed rather than merely happening.
     era: u32,
@@ -122,6 +134,9 @@ pub struct GameSession {
 /// The size a ticket opens at, and the step its buttons move by.
 const TICKET_STEP: i64 = 10;
 
+/// Settlements a position must be held through, unbroken, to count as patience.
+const PATIENT_SETTLEMENTS: u32 = 10;
+
 /// Which screen the exchange is showing (GDD 9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -145,6 +160,8 @@ pub struct Observed {
     /// An age ended between this reading and the last. The largest event in the
     /// game, and the one nothing could have priced (GDD 5.6).
     pub cataclysm: bool,
+    /// Honours newly won by this settlement, by id.
+    pub won: Vec<String>,
 }
 
 /// What a settlement did to the ledger, as distinct from what it did to prices.
@@ -169,6 +186,8 @@ impl GameSession {
             chronicle: Vec::new(),
             chronicle_filter: None,
             licences: Licences::default(),
+            honours: Achievements::new(),
+            held_for: BTreeMap::new(),
             era: 0,
             equity_curve: Series::new(market.history_capacity),
             research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
@@ -194,6 +213,41 @@ impl GameSession {
         self.selected = Some(entity);
     }
 
+    /// Move the selection along the board by `rows`, for a keyboard.
+    ///
+    /// Walks the same order the board is drawn in — dearest first, and only the
+    /// paper this licence reaches — so what the arrows do matches what the eye
+    /// sees. Nothing selected yet lands on the top of the board.
+    pub fn step_selection(&mut self, rows: i32, table: &LicenceTable) {
+        let held = self.licences.held;
+        let visible: Vec<&Instrument> = {
+            let mut listings: Vec<&Instrument> = self
+                .board
+                .listings()
+                .filter(|listing| {
+                    listing
+                        .entity
+                        .listing_class()
+                        .is_some_and(|class| table.permits(held, class))
+                })
+                .collect();
+            listings.sort_by(|a, b| b.fair_value.total_cmp(&a.fair_value));
+            listings
+        };
+        if visible.is_empty() {
+            return;
+        }
+        let here = self
+            .selected
+            .as_ref()
+            .and_then(|entity| visible.iter().position(|l| &l.entity == entity));
+        let next = match here {
+            Some(index) => (index as i32 + rows).clamp(0, visible.len() as i32 - 1) as usize,
+            None => 0,
+        };
+        self.selected = Some(visible[next].entity.clone());
+    }
+
     /// Resize the ticket, never below one unit.
     pub fn resize_ticket(&mut self, by: i64) {
         self.ticket_units = (self.ticket_units + by).max(1);
@@ -211,6 +265,7 @@ impl GameSession {
         let Some(listing) = self.board.get(&entity).cloned() else {
             return Err(OrderError::NoUnits);
         };
+        let realised_before = self.portfolio.realised;
         let fill = self.portfolio.execute(
             &listing,
             side,
@@ -219,6 +274,13 @@ impl GameSession {
             orders,
         )?;
         *self.order_flow.entry(entity).or_default() += fill.flow;
+        honours::review_fill(
+            &mut self.honours,
+            &fill,
+            &self.board,
+            realised_before,
+            self.portfolio.realised,
+        );
         Ok(fill)
     }
 
@@ -270,6 +332,7 @@ impl GameSession {
         self.era = era;
 
         let mut books = SettlementBooks::default();
+        let mut won = Vec::new();
         if let Some(delta) = turning {
             let shocks = data.impacts.shocks(delta, &snapshot);
             self.board
@@ -309,6 +372,18 @@ impl GameSession {
             // One point per settlement, so the curve's x-axis is the world's
             // clock and not the wall's.
             self.equity_curve.push(self.portfolio.equity(&self.board));
+
+            self.age_positions();
+            let standing = honours::Standing {
+                portfolio: &self.portfolio,
+                board: &self.board,
+                licences: self.licences.held,
+                observed: self.observed,
+                cataclysm,
+                written_off: books.written_off.len(),
+                income: books.income,
+            };
+            won = honours::review(&mut self.honours, &standing);
         }
 
         self.snapshot = snapshot;
@@ -316,7 +391,42 @@ impl GameSession {
             board,
             books,
             cataclysm,
+            won,
         }
+    }
+
+    /// Count another settlement against every position still held, and forget
+    /// the ones that are not.
+    ///
+    /// Patience is measured against a *continuously* held position: selling out
+    /// and buying back in starts the count again, which is the difference
+    /// between holding through a bad decade and merely owning something twice.
+    fn age_positions(&mut self) {
+        self.held_for
+            .retain(|entity, _| self.portfolio.units_of(entity) > 0);
+        for position in self.portfolio.positions() {
+            let years = self.held_for.entry(position.entity.clone()).or_insert(0);
+            *years += 1;
+            if *years >= PATIENT_SETTLEMENTS {
+                self.honours.unlock("patient_money");
+            }
+        }
+    }
+
+    pub fn honours(&self) -> &Achievements {
+        &self.honours
+    }
+
+    /// Bring the honours in line with the shipped definitions.
+    ///
+    /// Called after construction and after a load: `sync_definitions` keeps what
+    /// has been won while picking up renamed text and achievements added since
+    /// the save was written, which is the whole reason the toolkit has it.
+    pub fn adopt_honours(
+        &mut self,
+        definitions: Vec<macroquad_toolkit::achievements::Achievement>,
+    ) {
+        self.honours.sync_definitions(definitions);
     }
 
     /// The broker's equity at every settlement observed.
@@ -439,6 +549,7 @@ impl GameSession {
             market_state: self.market_rng.state(),
             portfolio: self.portfolio.to_save(),
             licences: self.licences,
+            honours: self.honours.clone(),
         }
     }
 
@@ -457,6 +568,8 @@ impl GameSession {
             chronicle: Vec::new(),
             chronicle_filter: None,
             licences: save.licences,
+            honours: save.honours.clone(),
+            held_for: BTreeMap::new(),
             era: 0,
             equity_curve: Series::new(market.history_capacity),
             research_class: DEFAULT_RESEARCH_CLASS.to_owned(),
@@ -503,6 +616,7 @@ pub fn migrate_save_value(
         market_state: 0,
         portfolio: PortfolioSave::default(),
         licences: Licences::default(),
+        honours: Achievements::new(),
     })
 }
 

@@ -14,9 +14,9 @@ pub mod portfolio;
 
 pub use portfolio::{OrderError, Portfolio, PortfolioSave};
 
-use crate::data::GameConfig;
+use crate::data::{GameConfig, GameData};
 use crate::market::orders::{Fill, OrderConfig, Side};
-use crate::market::{Board, BoardChange, ImpactTable, InstrumentRules, MarketConfig};
+use crate::market::{Board, BoardChange, Instrument, MarketConfig};
 use crate::world::delta::{Change, WorldDelta};
 use crate::world::fundamentals::EntityRef;
 use crate::world::Snapshot;
@@ -152,6 +152,12 @@ pub struct GameSession {
     /// settlement. This is GDD 5.4's `flow` term: your size is not free, and it
     /// is still costing you a year after you traded.
     order_flow: BTreeMap<EntityRef, f32>,
+    /// The world as it was last read, kept so the research and listing screens
+    /// can show the fundamentals a price is derived from without re-reading it.
+    /// It is a view of the world, never a second opinion about it.
+    snapshot: Snapshot,
+    /// Which screen the exchange is showing.
+    screen: Screen,
     /// The listing the desk is looking at, if any.
     selected: Option<EntityRef>,
     /// The size on the ticket.
@@ -170,6 +176,22 @@ pub struct GameSession {
 /// The size a ticket opens at, and the step its buttons move by.
 const TICKET_STEP: i64 = 10;
 
+/// Which screen the exchange is showing (GDD 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// The board, the ledger, and the desk.
+    Floor,
+    /// One listing in full: its chart, its fundamentals, and why it moved.
+    Listing,
+}
+
+/// Everything one reading of the world did.
+#[derive(Debug, Clone, Default)]
+pub struct Observed {
+    pub board: BoardChange,
+    pub books: SettlementBooks,
+}
+
 /// What a settlement did to the ledger, as distinct from what it did to prices.
 #[derive(Debug, Clone, Default)]
 pub struct SettlementBooks {
@@ -187,6 +209,8 @@ impl GameSession {
             board: Board::new(),
             portfolio: Portfolio::new(orders),
             order_flow: BTreeMap::new(),
+            snapshot: Snapshot::default(),
+            screen: Screen::Floor,
             selected: None,
             ticket_units: TICKET_STEP,
             market_rng: SeededRng::new(market.seed),
@@ -201,7 +225,7 @@ impl GameSession {
 
     /// The listing the desk is looking at, if it is still listed. A selection
     /// whose paper was struck off simply reads as no selection.
-    pub fn selected(&self) -> Option<&crate::market::Instrument> {
+    pub fn selected(&self) -> Option<&Instrument> {
         self.board.get(self.selected.as_ref()?)
     }
 
@@ -257,49 +281,67 @@ impl GameSession {
         Some((fill, allowed))
     }
 
-    /// Bring the board in line with a fresh reading of the world.
+    /// Take in a fresh reading of the world.
     ///
-    /// Separate from [`record`](Self::record) because the two answer different
-    /// questions: the board must hang the moment the world first answers, while
-    /// a settlement is only logged when the world actually turns.
-    pub fn list(
+    /// One call rather than two on purpose: the board must be revalued *before*
+    /// prices settle, or every price would drift toward a fair value a year
+    /// stale. Keeping both steps behind one function means that ordering cannot
+    /// be got wrong by a caller.
+    ///
+    /// `turning` is `None` on the first view to arrive: the board hangs, but
+    /// nothing settles, because no year has passed for the exchange to price.
+    pub fn observe(
         &mut self,
-        snapshot: &Snapshot,
-        rules: &InstrumentRules,
-        market: &MarketConfig,
-    ) -> BoardChange {
-        self.board.refresh(snapshot, rules, market)
+        snapshot: Snapshot,
+        turning: Option<&WorldDelta>,
+        data: &GameData,
+    ) -> Observed {
+        let market = &data.config.market;
+        let board = self.board.refresh(&snapshot, &data.instruments, market);
+
+        let mut books = SettlementBooks::default();
+        if let Some(delta) = turning {
+            let shocks = data.impacts.shocks(delta, &snapshot);
+            self.board
+                .settle(&shocks, &self.order_flow, market, &mut self.market_rng);
+
+            // The floor forgets a large order gradually. Decaying after settling
+            // rather than before means the year in which an order was struck is
+            // the year it hits hardest, which is the honest ordering.
+            for flow in self.order_flow.values_mut() {
+                *flow *= data.config.orders.flow_decay;
+            }
+            self.order_flow.retain(|_, flow| flow.abs() > 0.0001);
+
+            books = SettlementBooks {
+                income: self.portfolio.collect_income(&self.board),
+                written_off: self.portfolio.write_off_delisted(&self.board),
+            };
+        }
+
+        self.snapshot = snapshot;
+        Observed { board, books }
     }
 
-    /// Move every price by one settlement (GDD 5.4).
-    ///
-    /// Called only when the world has actually turned — a price that moved on a
-    /// frame where nothing happened would be noise the player cannot trace to
-    /// anything, which is exactly what Pillar 1 forbids.
-    pub fn settle_prices(
-        &mut self,
-        delta: &WorldDelta,
-        snapshot: &Snapshot,
-        impacts: &ImpactTable,
-        market: &MarketConfig,
-        orders: &OrderConfig,
-    ) -> SettlementBooks {
-        let shocks = impacts.shocks(delta, snapshot);
-        self.board
-            .settle(&shocks, &self.order_flow, market, &mut self.market_rng);
+    /// The world as last read, for the screens that show fundamentals.
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
 
-        // The floor forgets a large order gradually. Decaying after settling
-        // rather than before means the year in which an order was struck is the
-        // year it hits hardest, which is the honest ordering.
-        for flow in self.order_flow.values_mut() {
-            *flow *= orders.flow_decay;
-        }
-        self.order_flow.retain(|_, flow| flow.abs() > 0.0001);
+    pub fn screen(&self) -> Screen {
+        self.screen
+    }
 
-        SettlementBooks {
-            income: self.portfolio.collect_income(&self.board),
-            written_off: self.portfolio.write_off_delisted(&self.board),
+    /// Open a listing's own page, which only makes sense for paper that exists.
+    pub fn open_listing(&mut self, entity: EntityRef) {
+        if self.board.get(&entity).is_some() {
+            self.selected = Some(entity);
+            self.screen = Screen::Listing;
         }
+    }
+
+    pub fn close_listing(&mut self) {
+        self.screen = Screen::Floor;
     }
 
     /// The market noise stream's whole state — its seed and everything drawn
@@ -344,6 +386,8 @@ impl GameSession {
             // with what the world now carries.
             board: Board::new(),
             portfolio: Portfolio::from_save(&save.portfolio, orders),
+            snapshot: Snapshot::default(),
+            screen: Screen::Floor,
             // Flow is not saved: it decays to nothing within a few settlements
             // anyway, and a mark left on a price by an order struck before a
             // restart is not worth a migration to carry.
@@ -467,21 +511,24 @@ mod tests {
 
     #[test]
     fn the_board_hangs_from_the_world_and_the_digest_names_the_tickers() {
-        let rules = data().instruments;
+        let data = data();
         let view = world();
 
         let mut session = GameSession::new(&market(), &orders());
-        let opening = session.list(&Snapshot::read(&view), &rules, &market());
+        let opening = session.observe(Snapshot::read(&view), None, &data).board;
 
         assert!(!session.board().is_empty(), "the world hangs the board");
         assert_eq!(opening.listed.len(), session.board().len());
         assert!(opening.delisted.is_empty());
+        // The reading is kept, so the listing screen can show the fundamentals
+        // a price was derived from without asking the world again.
+        assert!(session.snapshot().iter().count() > 0);
 
         // A settlement's digest reports the board's own tickers, so a razed
         // town reads as paper struck off rather than as an entity count.
         let mut razed = view.clone();
         let lost = razed.settlements.remove(0);
-        let change = session.list(&Snapshot::read(&razed), &rules, &market());
+        let change = session.observe(Snapshot::read(&razed), None, &data).board;
         session.record(&delta(razed.year + 1, 2), &change);
 
         assert_eq!(change.delisted.len(), 1);

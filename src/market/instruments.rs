@@ -149,6 +149,11 @@ pub struct Instrument {
     /// Every price this listing has ever traded at, bounded but never losing an
     /// extreme — the spike that mattered survives a century of decimation.
     pub history: Series,
+    /// Fair value over the same span, so a chart can draw the gap the broker is
+    /// trading rather than just the price (GDD 9). Two series rather than one
+    /// because they are decimated in step: the same bucket index covers the same
+    /// years in both, which is what lets them be drawn on one pair of axes.
+    pub fair_history: Series,
     /// Why the price last moved, decomposed (GDD 5.4).
     pub last_move: PriceMove,
     /// The world year the listing first appeared.
@@ -246,6 +251,8 @@ impl Board {
                     let price = fair_value.max(market.min_price);
                     let mut history = Series::new(market.history_capacity);
                     history.push(price);
+                    let mut fair_history = Series::new(market.history_capacity);
+                    fair_history.push(fair_value);
                     self.listings.insert(
                         entry.entity.clone(),
                         Instrument {
@@ -260,6 +267,7 @@ impl Board {
                             volatility: rule.volatility,
                             liquidity: rule.liquidity,
                             history,
+                            fair_history,
                             last_move: PriceMove::unmoved(price),
                             listed_year: snapshot.year,
                         },
@@ -310,6 +318,7 @@ impl Board {
             listing.price = moved.to;
             listing.last_move = moved;
             listing.history.push(moved.to);
+            listing.fair_history.push(listing.fair_value);
         }
     }
 

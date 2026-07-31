@@ -15,9 +15,11 @@ HTTP, `src/world/fundamentals.rs` reads a `WorldView` into the exchange's one vo
 turns a reading into a `Board` of listings with fair values; `src/market/impact.rs` turns
 typed deltas into shocks; `src/market/pricing.rs` moves each price by drift + shock + noise +
 flow; `src/market/orders.rs` prices an order including its own market impact; and
-`src/state/portfolio.rs` is the ledger. A century can be traded headlessly. What remains is
-**M3, the floor**: charts via `macroquad_toolkit::series`, a listing screen, and the research
-browser. `gdd.md` is the specification and the source of truth.
+`src/state/portfolio.rs` is the ledger. A century can be traded headlessly, and `src/ui/`
+carries two screens: the floor (board, ledger, movers, settlements, desk with an order
+ticket) and a listing's own page (chart, fundamentals, price-move decomposition). What
+remains is **M4**: the chronicle feed and the research browser. `gdd.md` is the specification
+and the source of truth.
 
 **One deliberate deviation from the GDD.** The GDD makes Solo (an embedded, locally ticked
 `mytherra-core`) the default and Live the last milestone (M6). This project went **Live
@@ -52,7 +54,7 @@ cargo clippy --all-targets --all-features -- -D warnings   # CI treats warnings 
 cargo build --release --target wasm32-unknown-unknown      # WebGL
 
 .\publish.ps1                                              # build Windows + WebGL, deploy (the sanctioned validation path)
-.\scripts\capture_ui.ps1 -Scenes boards,trading            # headless screenshots -> docs/verification/
+.\scripts\capture_ui.ps1 -Scenes boards,trading,listing    # headless screenshots -> docs/verification/
 ```
 
 The two `#[ignore]`d tests in `src/world/live/tests.rs` are the only ones needing a server;
@@ -144,6 +146,20 @@ Target layout (GDD §11) — `game.rs` state machine, `world.rs` + `world/{solo,
 - No textures, no camera, no sprites, no map. This game is deliberately UI-only — "you are
   looking at the world through paper." The chart is the art.
 
+### Screens (GDD 9)
+
+`ui.rs` owns the vocabulary (`UiAction`), the context, and the layout constants; each panel is
+its own file under `ui/`. `GameSession::screen()` picks between the floor and a listing's
+page; `Esc` or the Back button returns.
+
+**The chart draws the envelope, not a line.** Each `series` bucket carries the high and low it
+reached, so the plot is a filled band with the closing value traced over it — a line through
+closes alone would step neatly between decimated buckets and imply a calm that never happened.
+It also draws **price against fair value on one pair of axes**, because the gap between them is
+what a broker is actually trading; the scale spans both series, or fair value would leave the
+plot exactly when it diverged, which is when the chart matters most. The approach is taken from
+`dragons_hoard/src/ui/history.rs`, which solved it first — don't re-derive it.
+
 ## Configuration
 
 `assets/data/game_config.json` is embedded at compile time via `include_str!` in
@@ -222,7 +238,8 @@ writes a PNG, and exits (compiled out on wasm32). `Game::begin_capture_scene` ho
 until the board is non-empty, because every screen here is downstream of the world answering.
 Scenes: `boards` (anything unrecognised) shows the opening state; **`trading` selects the
 deepest listing and buys it**, so one screenshot covers the ticket, the fill, the tape and a
-real position in the ledger — the whole order path, which no static scene shows.
+real position in the ledger — the whole order path, which no static scene shows; `listing`
+does the same and then opens that listing's page.
 
 A capture runs in about a second of wall-clock, while the server ticks every ten, so a
 captured frame will normally show a full board but **zero settlements observed**. That is

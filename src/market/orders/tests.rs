@@ -17,6 +17,8 @@ fn config() -> OrderConfig {
 fn listing(price: f32, liquidity: f32) -> Instrument {
     let mut history = Series::new(64);
     history.push(price);
+    let mut fair_history = Series::new(64);
+    fair_history.push(price);
     Instrument {
         symbol: "TEST".to_owned(),
         name: "A Test Claim".to_owned(),
@@ -29,6 +31,7 @@ fn listing(price: f32, liquidity: f32) -> Instrument {
         volatility: 0.1,
         liquidity,
         history,
+        fair_history,
         last_move: PriceMove::unmoved(price),
         listed_year: 1,
     }

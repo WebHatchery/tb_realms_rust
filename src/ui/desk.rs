@@ -177,4 +177,17 @@ fn draw_ticket(ctx: &UiContext<'_>, desk: Rect, mouse: Vec2, actions: &mut Vec<U
             actions.push(UiAction::Order(side));
         }
     }
+
+    // The way through to the listing's own page. Deliberately a button rather
+    // than a second click on the board row: browsing the board and opening a
+    // page are different intentions, and one should not become the other by
+    // accident.
+    if draw_button(
+        Rect::new(x + 412.0, desk.y + 64.0, 92.0, 34.0),
+        "Inspect",
+        mouse,
+        true,
+    ) {
+        actions.push(UiAction::OpenListing(listing.entity.clone()));
+    }
 }

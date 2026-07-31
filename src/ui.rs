@@ -16,15 +16,17 @@
 //! cost, because the quote and the execution are one function.
 
 mod board;
+mod chart;
 mod desk;
 mod ledger;
+mod listing;
 mod movers;
 mod settlements;
 mod widgets;
 
 use crate::data::GameData;
 use crate::market::orders::Side;
-use crate::state::GameSession;
+use crate::state::{GameSession, Screen};
 use crate::world::fundamentals::EntityRef;
 use crate::world::SourceStatus;
 use macroquad::prelude::*;
@@ -46,6 +48,10 @@ pub enum UiAction {
     Load,
     /// Look at a listing. The desk's ticket follows the selection.
     Select(EntityRef),
+    /// Open a listing's own page: its chart, its fundamentals, its last move.
+    OpenListing(EntityRef),
+    /// Return to the floor.
+    CloseListing,
     /// Change the ticket's size by this many units.
     ResizeTicket(i64),
     /// Place the ticket as it stands.
@@ -98,12 +104,19 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
     let mut actions = Vec::new();
     let mouse = ctx.ui.mouse_position();
 
+    // The header is common to both screens: the world's clock and the state of
+    // the wire are true wherever the player is standing.
     draw_header(&ctx);
-    board::draw(&ctx, mouse, &mut actions);
-    ledger::draw(&ctx);
-    movers::draw(&ctx);
-    settlements::draw(&ctx);
-    desk::draw(&ctx, mouse, &mut actions);
+    match ctx.session.screen() {
+        Screen::Floor => {
+            board::draw(&ctx, mouse, &mut actions);
+            ledger::draw(&ctx);
+            movers::draw(&ctx);
+            settlements::draw(&ctx);
+            desk::draw(&ctx, mouse, &mut actions);
+        }
+        Screen::Listing => listing::draw(&ctx, mouse, &mut actions),
+    }
 
     actions
 }

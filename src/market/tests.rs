@@ -428,3 +428,62 @@ fn the_same_seeds_replay_the_same_traded_century() {
     assert_eq!(backtest(50, 2024), backtest(50, 2024));
     assert_ne!(backtest(50, 2024), backtest(50, 2025));
 }
+
+#[test]
+fn price_and_fair_value_histories_stay_in_step_across_a_century() {
+    // The listing chart draws both series on one x-axis, so bucket `n` must
+    // cover the same years in both. They share a capacity and are pushed
+    // together, which keeps their decimation in lockstep — but nothing in the
+    // type system says so, and a stray push in one of them would misalign every
+    // chart in the game without any test noticing.
+    let data = GameData::load().unwrap();
+    let market = &data.config.market;
+    let mut world_rng = SeededRng::new(515);
+    let mut market_rng = SeededRng::new(market.seed);
+    let no_flow = BTreeMap::new();
+
+    let mut view = base();
+    let mut board = Board::new();
+    board.refresh(&Snapshot::read(&view), &data.instruments, market);
+
+    for _ in 0..400 {
+        let next = turn(&view, &mut world_rng);
+        let snapshot = Snapshot::read(&next);
+        let delta = diff(&view, &next);
+        board.refresh(&snapshot, &data.instruments, market);
+        board.settle(
+            &data.impacts.shocks(&delta, &snapshot),
+            &no_flow,
+            market,
+            &mut market_rng,
+        );
+        view = next;
+    }
+
+    let mut decimated = 0;
+    for listing in board.listings() {
+        assert_eq!(
+            listing.history.len(),
+            listing.fair_history.len(),
+            "{} draws two series of different lengths on one axis",
+            listing.symbol
+        );
+        assert_eq!(
+            listing.history.count(),
+            listing.fair_history.count(),
+            "{} recorded a different number of settlements in each",
+            listing.symbol
+        );
+        assert_eq!(
+            listing.history.resolution(),
+            listing.fair_history.resolution()
+        );
+        if listing.history.resolution() > 1 {
+            decimated += 1;
+        }
+    }
+    assert!(
+        decimated > 40,
+        "the fixture must actually exercise decimation, only {decimated} did"
+    );
+}

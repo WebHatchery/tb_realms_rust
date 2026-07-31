@@ -135,6 +135,11 @@ impl Game {
         if is_key_pressed(KeyCode::L) {
             self.events.push(UiAction::Load);
         }
+        // Escape backs out of a listing, which is the one navigation a player
+        // should never have to hunt for a button to perform.
+        if is_key_pressed(KeyCode::Escape) {
+            self.events.push(UiAction::CloseListing);
+        }
 
         let actions: Vec<UiAction> = self.events.drain().collect();
         for action in actions {
@@ -165,17 +170,25 @@ impl Game {
         if self.session.board().is_empty() {
             return;
         }
-        if scene == "trading" {
-            let deepest = self
-                .session
-                .board()
-                .listings()
-                .max_by(|a, b| a.liquidity.total_cmp(&b.liquidity))
-                .map(|listing| listing.entity.clone());
-            if let Some(entity) = deepest {
+        // Both trading scenes start from the deepest listing, so a screenshot is
+        // not fighting slippage while it is trying to show something else.
+        let deepest = self
+            .session
+            .board()
+            .listings()
+            .max_by(|a, b| a.liquidity.total_cmp(&b.liquidity))
+            .map(|listing| listing.entity.clone());
+        match (scene.as_str(), deepest) {
+            ("trading", Some(entity)) => {
                 self.session.select(entity);
                 self.place_order(Side::Buy);
             }
+            ("listing", Some(entity)) => {
+                self.session.select(entity.clone());
+                self.place_order(Side::Buy);
+                self.session.open_listing(entity);
+            }
+            _ => {}
         }
         self.pending_scene = None;
     }
@@ -207,19 +220,10 @@ impl Game {
             });
     }
 
-    /// Rebuild the board when the world's clock has moved past the one it was
-    /// hung from, and settle every price if the world actually turned. Returns
-    /// what changed, which is empty on the overwhelming majority of frames — the
-    /// world turns every few seconds and the exchange draws sixty times a
-    /// second.
-    ///
-    /// The order matters. Listings are refreshed first so a settlement prices
-    /// against the fair values the *new* world implies, and only then do prices
-    /// move toward them. Settling first would drift every price toward a fair
-    /// value one year stale.
-    ///
-    /// `turning` is `None` on the first view to arrive: the board hangs, but
-    /// nothing settles, because no year has passed for the exchange to price.
+    /// Read the world when its clock has moved past the one the board was hung
+    /// from. Returns what changed, which is empty on the overwhelming majority
+    /// of frames — the world turns every few seconds and the exchange draws
+    /// sixty times a second.
     fn rehang_board(&mut self, turning: Option<&crate::world::WorldDelta>) -> BoardChange {
         let Some(view) = self.world.view() else {
             return BoardChange::default();
@@ -230,29 +234,19 @@ impl Game {
         self.board_tick = Some(view.tick_count);
 
         let snapshot = Snapshot::read(view);
-        let change = self
-            .session
-            .list(&snapshot, &self.data.instruments, &self.data.config.market);
-        if let Some(delta) = turning {
-            let books = self.session.settle_prices(
-                delta,
-                &snapshot,
-                &self.data.impacts,
-                &self.data.config.market,
-                &self.data.config.orders,
-            );
-            if books.income > 0.0 {
-                self.notifications
-                    .success(format!("Coupons paid: {:.0} crowns", books.income));
-            }
-            // A position in something the world stopped carrying is a total
-            // loss, not a markdown. It deserves to be said out loud.
-            for symbol in &books.written_off {
-                self.notifications
-                    .danger(format!("{symbol} delisted — the position is a total loss"));
-            }
+        let observed = self.session.observe(snapshot, turning, &self.data);
+
+        if observed.books.income > 0.0 {
+            self.notifications
+                .success(format!("Coupons paid: {:.0} crowns", observed.books.income));
         }
-        change
+        // A position in something the world stopped carrying is a total loss,
+        // not a markdown. It deserves to be said out loud.
+        for symbol in &observed.books.written_off {
+            self.notifications
+                .danger(format!("{symbol} delisted — the position is a total loss"));
+        }
+        observed.board
     }
 
     fn apply_action(&mut self, action: UiAction) {
@@ -264,6 +258,8 @@ impl Game {
             UiAction::Save => self.save_game(),
             UiAction::Load => self.load_game(),
             UiAction::Select(entity) => self.session.select(entity),
+            UiAction::OpenListing(entity) => self.session.open_listing(entity),
+            UiAction::CloseListing => self.session.close_listing(),
             UiAction::ResizeTicket(by) => self.session.resize_ticket(by),
             UiAction::Order(side) => self.place_order(side),
         }

@@ -546,8 +546,40 @@ Env vars (replace `MYGAME` with your per-game prefix):
 - `MYGAME_CAPTURE_SCENE` — scene name (default `gameplay`)
 - `MYGAME_CAPTURE_FRAMES` — frames to simulate before capture (default 150)
 - `MYGAME_WINDOW_WIDTH` / `MYGAME_WINDOW_HEIGHT` — window size override
+- `MYGAME_HEADLESS` — hide the game window (default: on while capturing)
 
 All env access is stubbed out on `wasm32`, so web builds are unaffected.
+
+#### Really headless (`capture::headless`)
+
+macroquad has no offscreen mode — miniquad must create a real OS window to own
+the GL context and shows it as soon as that context exists — so a capture used
+to pop a full game window onto the desktop and take focus. `capture::headless`
+takes that window straight back off the desktop (`ShowWindow(SW_HIDE)` on
+Windows; a no-op elsewhere). Rendering is unaffected: the frame still lands in
+the back buffer, which the driver owns whether or not the window is mapped, and
+`get_screen_data()` reads the back buffer *before* the swap.
+
+`capture_window_conf` calls `headless::arm(prefix)` for you, so a game wired the
+standard way needs no change. `window_conf()` is the earliest hook a game has,
+and `arm` leaves a watcher behind that hides the window the moment miniquad
+shows it — so there is no visible flash while the game loads. A game that
+builds its `Conf` by hand should call `headless::arm("MYGAME")` there itself:
+
+```rust
+fn window_conf() -> Conf {
+    capture::headless::arm("MYGAME");
+    Conf { /* hand-built */ }
+}
+```
+
+`MYGAME_HEADLESS` defaults to whether capture mode is active, and overrides it
+either way:
+
+- `MYGAME_HEADLESS=0` during a capture — show the window, to watch a scene that
+  is coming out wrong (`capture_ui.ps1 -Visible` sets this)
+- `MYGAME_HEADLESS=1` outside capture mode — hide the window for any other
+  automated run, e.g. a playtest bot driving itself through a headless session
 
 A shared wrapper script (`macroquad-toolkit/scripts/capture_ui.ps1`) builds the
 game, runs one capture per scene, and sanity-checks each PNG. It derives the

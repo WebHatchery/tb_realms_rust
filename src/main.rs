@@ -28,13 +28,15 @@ async fn main() {
     // Screenshot harness: when TB_REALMS_CAPTURE_PATH is set, render
     // deterministic frames, write a PNG, and exit. The scene is applied once
     // the world has answered, because every screen here is downstream of that.
-    if let Some(config) = capture::CaptureConfig::from_env("TB_REALMS") {
-        game.begin_capture_scene(&config.scene);
-        capture::run_capture(&config, |dt| {
-            game.update(dt);
-            game.draw();
-        })
-        .await;
+    if let Some(configs) = capture::CaptureConfig::all_from_env("TB_REALMS") {
+        for config in configs {
+            game.begin_capture_scene(&config.scene);
+            capture::run_capture_once(&config, |dt| {
+                game.update(dt);
+                game.draw();
+            })
+            .await;
+        }
         return;
     }
 

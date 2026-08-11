@@ -7,6 +7,7 @@ A collection of common utilities for Macroquad game development, extracted from 
 - **Input utilities**: Mouse hovering, clicking, rectangle collision detection
 - **UI rendering**: Buttons (with press/release variants), panels, progress bars
 - **Asset management**: Texture loading and caching
+- **JSON game data**: Typed embedded/runtime loading, labeled diagnostics, native/WASM handling, and fallback paths
 - **Camera2D**: Pan and zoom for 2D games
 - **Event bus**: Generic event system for decoupled game logic
 - **Color palettes**: Consistent dark theme colors
@@ -62,6 +63,25 @@ async fn main() {
 ```
 
 ## Modules
+
+### JSON game data (`data_loader` module)
+
+Keep schemas and semantic validation in the game, but route all generic JSON parsing and loading through the toolkit:
+
+```rust
+#[derive(serde::Deserialize)]
+struct GameConfig {
+    starting_gold: u32,
+}
+
+let embedded: GameConfig =
+    macroquad_toolkit::include_json!("../assets/data/game_config.json")?;
+
+let runtime: GameConfig =
+    macroquad_toolkit::data_loader::load_json_file("assets/data/game_config.json").await?;
+```
+
+Use `parse_json_labeled` when JSON already arrived as a string. Do not create project-local generic wrappers around `serde_json`; the toolkit provides consistent source names, line/column diagnostics, native/WASM loading, and embedded fallback support.
 
 ### Input (`input` module)
 

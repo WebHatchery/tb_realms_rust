@@ -8,108 +8,53 @@
 //! it is reading, can change none of it (GDD Pillar 2, §12). There is no
 //! `POST /action` in this file and there never will be.
 //!
-//! The transport follows `mytherra/src/net.rs` exactly rather than inventing a
-//! second pattern (GDD 10): `quad-net` gives one poll-based, non-blocking API
-//! across native (a background thread) and WASM (macroquad's own `sapp-jsutils`
-//! interop, *not* wasm-bindgen, so it coexists with the WebGL build). Every
-//! request is a [`Pending<T>`] polled once per frame; nothing ever blocks the
-//! game loop.
+//! The transport uses the toolkit's shared `net` feature: `quad-net` gives one
+//! poll-based, non-blocking API across native (a background thread) and WASM
+//! (macroquad's own `sapp-jsutils` interop, *not* wasm-bindgen, so it coexists
+//! with the WebGL build). Every request is a [`Pending<T>`] polled once per
+//! frame; nothing ever blocks the game loop.
 //!
-//! WASM runtime caveat, inherited from that client: quad-net's browser shim only
-//! resolves an HTTP 200, so a refused connection never resolves on its own —
-//! which is what [`Pending::poll_timed`] exists to catch.
+//! WASM runtime caveat, inherited from the shared transport: the browser shim
+//! only resolves an HTTP 200, so a refused connection never resolves on its own
+//! — which is what [`Pending::poll_timed`] exists to catch.
 
 use crate::world::delta::{diff, WorldDelta};
 use crate::world::{SourceStatus, WorldSource};
+use macroquad_toolkit::net::{HttpClient, Pending};
 use mytherra_protocol::{EventsDelta, WorldView};
-use quad_net::http_request::{Request, RequestBuilder};
-use serde::de::DeserializeOwned;
-use std::marker::PhantomData;
 
 /// The header carrying the read-only spectator secret, matched by the server's
 /// `SPECTATOR_TOKEN_HEADER`.
 const SPECTATOR_TOKEN_HEADER: &str = "X-Spectator-Token";
 
-/// A request in flight. Poll each frame: `None` while pending, `Some` once the
-/// response — or a failure — has arrived.
-pub struct Pending<T> {
-    request: Request,
-    /// Seconds in flight, accumulated by [`poll_timed`](Pending::poll_timed).
-    elapsed: f32,
-    _marker: PhantomData<fn() -> T>,
-}
-
-impl<T: DeserializeOwned> Pending<T> {
-    fn new(request: Request) -> Self {
-        Self {
-            request,
-            elapsed: 0.0,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Poll for the response: `Some(Ok)` on a decoded body, `Some(Err)` on a
-    /// transport or parse failure.
-    pub fn poll(&mut self) -> Option<Result<T, String>> {
-        self.request.try_recv().map(|result| {
-            result
-                .map_err(|err| err.to_string())
-                .and_then(|body| serde_json::from_str(&body).map_err(|err| err.to_string()))
-        })
-    }
-
-    /// Poll, treating silence beyond `timeout` seconds as a failure. This is the
-    /// wasm safety net: the browser shim resolves only a 200, so a refused
-    /// connection would otherwise hang this request forever and the exchange
-    /// would sit on "opening the wire" with no explanation.
-    pub fn poll_timed(&mut self, dt: f32, timeout: f32) -> Option<Result<T, String>> {
-        if let Some(result) = self.poll() {
-            return Some(result);
-        }
-        self.elapsed += dt;
-        if self.elapsed >= timeout {
-            Some(Err("the world did not answer in time".to_owned()))
-        } else {
-            None
-        }
-    }
-}
-
-/// A handle to one authority server's spectator endpoints, addressed by base URL
-/// (e.g. `http://127.0.0.1:8791`).
+/// A handle to Mytherra's read-only spectator endpoints.
 pub struct SpectatorClient {
-    base_url: String,
-    token: String,
+    api: HttpClient,
 }
 
 impl SpectatorClient {
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into(),
-            token: token.into(),
+            api: HttpClient::new(base_url).with_header(SPECTATOR_TOKEN_HEADER, token),
         }
-    }
-
-    fn get(&self, path: &str) -> RequestBuilder {
-        RequestBuilder::new(&format!("{}{path}", self.base_url))
-            .header(SPECTATOR_TOKEN_HEADER, &self.token)
     }
 
     /// `GET /spectate` — the whole world, read-only.
     pub fn fetch_world(&self) -> Pending<WorldView> {
-        Pending::new(self.get("/spectate").send())
+        self.api.get("/spectate")
     }
 
     /// `GET /spectate/events?since=` — the chronicle since `cursor`.
     pub fn fetch_events(&self, since: u64) -> Pending<EventsDelta> {
-        Pending::new(self.get(&format!("/spectate/events?since={since}")).send())
+        self.api.get(&format!("/spectate/events?since={since}"))
     }
 }
 
 /// What the live source is waiting on. The two reads are sequenced rather than
 /// issued together on purpose: the chronicle is only fetched once a *newer*
-/// world has actually arrived, so the prose a settlement reports always belongs
-/// to the turning it accompanies instead of to whatever was in flight nearby.
+/// world has actually arrived, so the prose a settlement reports always
+/// belongs to the turning it accompanies instead of to whatever was in flight
+/// nearby.
 enum Stage {
     /// Between polls, counting down to the next read.
     Waiting(f32),
@@ -154,7 +99,8 @@ impl LiveWorld {
     }
 
     /// Note a failed read without discarding the world already in hand — a
-    /// broker keeps trading on the last prices it knows when the wire goes quiet.
+    /// broker keeps trading on the last prices it knows when the wire goes
+    /// quiet.
     fn fail(&mut self, err: String) -> Option<WorldDelta> {
         self.status = SourceStatus::Failed(err);
         self.stage = Stage::Waiting(self.poll_seconds);
@@ -221,8 +167,8 @@ impl WorldSource for LiveWorld {
                     }
                     // The world still turned even if its chronicle didn't
                     // arrive. Report the delta with no prose rather than
-                    // dropping a settlement — the numbers are the truth and the
-                    // chronicle is the newspaper (GDD 5.5).
+                    // dropping a settlement — the numbers are the truth and
+                    // the chronicle is the newspaper (GDD 5.5).
                     Some(Err(err)) => {
                         let delta = std::mem::take(&mut **delta);
                         self.status = SourceStatus::Failed(format!("chronicle unread: {err}"));

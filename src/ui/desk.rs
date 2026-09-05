@@ -134,7 +134,24 @@ fn draw_ticket(ctx: &UiContext<'_>, desk: Rect, mouse: Vec2, actions: &mut Vec<U
         &format!(
             "{}  {}  ·  {:.2}  ·  {holding}",
             listing.symbol,
-            truncate(&listing.name, 18),
+            truncate(
+                &listing.name,
+                (desk.right()
+                    - x
+                    - 16.0
+                    - macroquad_toolkit::ui::measure_ui_text(
+                        &format!(
+                            "{}    ·  {:.2}  ·  {holding}",
+                            listing.symbol, listing.price
+                        ),
+                        None,
+                        15,
+                        1.0
+                    )
+                    .width)
+                    .max(0.0),
+                15.0
+            ),
             listing.price
         ),
         x,
@@ -172,7 +189,7 @@ fn draw_ticket(ctx: &UiContext<'_>, desk: Rect, mouse: Vec2, actions: &mut Vec<U
         );
         if let Err(err) = allowed {
             draw_ui_text_ex(
-                &truncate(&err.label(), 48),
+                &truncate(&err.label(), desk.right() - x - 16.0, 12.0),
                 x,
                 desk.y + 124.0,
                 TextStyle::new(12.0, Color::new(0.93, 0.65, 0.30, 1.0)).params(),

@@ -213,7 +213,7 @@ fn draw_rows(
         }
 
         draw_ui_text_ex(
-            &truncate(&entry.name, 34),
+            &truncate(&entry.name, value_x - table.x - 16.0, 14.0),
             table.x + 6.0,
             y,
             TextStyle::new(14.0, dark::TEXT).params(),

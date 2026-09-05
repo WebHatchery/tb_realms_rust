@@ -46,7 +46,7 @@ pub fn draw(ctx: &UiContext<'_>) {
             TextStyle::new(15.0, dark::TEXT_BRIGHT).params(),
         );
         draw_ui_text_ex(
-            &truncate(&listing.name, 15),
+            &truncate(&listing.name, rect.w - 134.0, 14.0),
             rect.x + 66.0,
             y,
             TextStyle::new(14.0, dark::TEXT).params(),
@@ -70,7 +70,8 @@ pub fn draw(ctx: &UiContext<'_>) {
                     listing.listed_year,
                     listing.liquidity * 100.0
                 ),
-                44,
+                rect.w - 34.0,
+                11.0,
             ),
             rect.x + 20.0,
             y,
@@ -85,7 +86,7 @@ pub fn draw(ctx: &UiContext<'_>) {
             .map(|(name, value)| format!("{name} {value:+.2}"))
             .collect();
         draw_ui_text_ex(
-            &truncate(&parts.join("  "), 44),
+            &truncate(&parts.join("  "), rect.w - 34.0, 12.0),
             rect.x + 20.0,
             y,
             TextStyle::new(12.0, dark::TEXT).params(),

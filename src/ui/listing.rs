@@ -89,7 +89,11 @@ fn draw_heading(
     actions: &mut Vec<UiAction>,
 ) {
     draw_ui_text_ex(
-        &format!("{}  {}", listing.symbol, truncate(&listing.name, 40)),
+        &truncate(
+            &format!("{}  {}", listing.symbol, listing.name),
+            PAGE.w - 170.0,
+            26.0,
+        ),
         PAGE.x + 20.0,
         PAGE.y + 34.0,
         TextStyle::new(26.0, dark::TEXT_BRIGHT).params(),
@@ -257,7 +261,7 @@ fn draw_fundamentals(ctx: &UiContext<'_>, listing: &Instrument, rect: Rect) {
             Value::Status(label) => (label.clone(), dark::TEXT),
         };
         draw_ui_text_ex(
-            &truncate(&text, 16),
+            &truncate(&text, 90.0, 13.0),
             rect.right() - 90.0,
             y,
             TextStyle::new(13.0, tint).params(),

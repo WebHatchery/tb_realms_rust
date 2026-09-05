@@ -59,7 +59,7 @@ enum Stage {
     /// Between polls, counting down to the next read.
     Waiting(f32),
     /// A world read is in flight.
-    Fetching(Pending<WorldView>),
+    Fetching(Box<Pending<WorldView>>),
     /// The world turned; fetching the chronicle that goes with it. The already
     /// diffed delta waits here for its prose.
     FetchingEvents {
@@ -147,7 +147,7 @@ impl WorldSource for LiveWorld {
             Stage::Waiting(remaining) => {
                 *remaining -= dt;
                 if *remaining <= 0.0 {
-                    self.stage = Stage::Fetching(self.client.fetch_world());
+                    self.stage = Stage::Fetching(Box::new(self.client.fetch_world()));
                 }
                 None
             }

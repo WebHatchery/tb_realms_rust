@@ -189,7 +189,7 @@ fn draw_feed(lines: &[&WorldEvent], rect: Rect) {
             TextStyle::new(11.0, tint(event.kind)).params(),
         );
         draw_ui_text_ex(
-            &truncate(&event.message, 88),
+            &truncate(&event.message, rect.w - 132.0, 13.0),
             rect.x + 132.0,
             y,
             TextStyle::new(13.0, dark::TEXT).params(),

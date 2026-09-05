@@ -57,7 +57,7 @@ pub fn draw(ctx: &UiContext<'_>) {
 
         for line in &record.notable {
             draw_ui_text_ex(
-                &truncate(line, 44),
+                &truncate(line, rect.w - 34.0, 12.0),
                 rect.x + 20.0,
                 y,
                 TextStyle::new(12.0, Color::new(0.85, 0.72, 0.45, 1.0)).params(),
@@ -68,7 +68,7 @@ pub fn draw(ctx: &UiContext<'_>) {
         // Why the year moved, in the same vocabulary the balance tables use.
         if !record.top_moves.is_empty() {
             draw_ui_text_ex(
-                &truncate(&record.top_moves.join(" · "), 46),
+                &truncate(&record.top_moves.join(" · "), rect.w - 34.0, 12.0),
                 rect.x + 20.0,
                 y,
                 TextStyle::new(12.0, dark::TEXT).params(),
@@ -78,7 +78,7 @@ pub fn draw(ctx: &UiContext<'_>) {
 
         if let Some(headline) = &record.headline {
             draw_ui_text_ex(
-                &truncate(headline, 46),
+                &truncate(headline, rect.w - 34.0, 12.0),
                 rect.x + 20.0,
                 y,
                 TextStyle::new(12.0, dark::TEXT_DIM).params(),

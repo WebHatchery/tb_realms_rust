@@ -97,11 +97,21 @@ pub fn draw(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         // A holding is marked on the board itself, so a broker can see their own
         // book without leaving the page they trade from.
         let held = ctx.session.portfolio().units_of(&listing.entity);
-        let name = if held > 0 {
-            format!("{} ({held})", truncate(&listing.name, 13))
+        let suffix = if held > 0 {
+            format!(" ({held})")
         } else {
-            truncate(&listing.name, 19)
+            String::new()
         };
+        let suffix_width = macroquad_toolkit::ui::measure_ui_text(&suffix, None, 14, 1.0).width;
+        let name = format!(
+            "{}{}",
+            truncate(
+                &listing.name,
+                (price_x - (rect.x + 70.0) - 10.0 - suffix_width).max(0.0),
+                14.0
+            ),
+            suffix
+        );
         draw_ui_text_ex(
             &name,
             rect.x + 70.0,

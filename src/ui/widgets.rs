@@ -2,12 +2,13 @@
 //!
 //! Two of these carry a design decision rather than convenience: [`direction`]
 //! is the colour-blind-safe up/down pair (GDD 12, open question 5), and
-//! [`truncate`] clips on character boundaries because the chronicle's prose is
+//! [`truncate`] uses measured width and Unicode boundaries because the prose is
 //! authored text and may not be ASCII.
 
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::draw_ui_text_ex;
+pub use macroquad_toolkit::ui::truncate_text_to_width as truncate;
 
 /// A titled surface. An empty title draws the surface alone.
 pub fn panel(rect: Rect, title: &str) {
@@ -81,16 +82,6 @@ pub fn direction(change: f32) -> Color {
     } else {
         dark::TEXT_DIM
     }
-}
-
-/// Clip a line to `max` characters, on a character boundary so multi-byte
-/// glyphs in the chronicle's prose can't be split mid-encoding.
-pub fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    let kept: String = text.chars().take(max.saturating_sub(1)).collect();
-    format!("{kept}…")
 }
 
 #[cfg(test)]

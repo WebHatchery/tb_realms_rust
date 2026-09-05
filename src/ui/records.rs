@@ -126,14 +126,14 @@ fn draw_honours(ctx: &UiContext<'_>, rect: Rect) {
             &format!(
                 "{}  {}",
                 if honour.unlocked { "[x]" } else { "[ ]" },
-                super::widgets::truncate(&honour.name, 30)
+                super::widgets::truncate(&honour.name, 190.0, 13.0)
             ),
             rect.x,
             y,
             TextStyle::new(13.0, tint).params(),
         );
         draw_ui_text_ex(
-            &super::widgets::truncate(&honour.description, 52),
+            &super::widgets::truncate(&honour.description, rect.w - 230.0, 12.0),
             rect.x + 230.0,
             y,
             TextStyle::new(12.0, dark::TEXT_DIM).params(),
@@ -202,7 +202,7 @@ fn draw_ladder(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
             // The blurb of the rung *above*, because what a broker wants to know
             // is what they are missing.
             draw_ui_text_ex(
-                &super::widgets::truncate(&next.blurb, 46),
+                &super::widgets::truncate(&next.blurb, rect.w, 12.0),
                 rect.x,
                 y,
                 TextStyle::new(12.0, dark::TEXT_DIM).params(),

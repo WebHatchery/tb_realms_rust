@@ -225,12 +225,16 @@ fn draw_header(ctx: &UiContext<'_>) {
     let width = 380.0;
     draw_badge(
         Rect::new(rect.right() - width - 18.0, rect.y + 20.0, width, 26.0),
-        &truncate(&text, 52),
+        &truncate(&text, width - 16.0, 14.0),
         Color::new(0.14, 0.16, 0.20, 1.0),
         tint,
     );
     draw_ui_text_ex(
-        &format!("reading {}", truncate(&ctx.data.config.world_url(), 58)),
+        &truncate(
+            &format!("reading {}", ctx.data.config.world_url()),
+            width,
+            13.0,
+        ),
         rect.right() - width - 18.0,
         rect.y + 64.0,
         TextStyle::new(13.0, dark::TEXT_DIM).params(),

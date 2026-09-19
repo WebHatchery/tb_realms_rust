@@ -10,7 +10,7 @@
 
 Sources: `game_apps/tb_realms/` (React 19 + PHP/Slim + MySQL original),
 `RustGames/mytherra/` (the simulation this game prices),
-`rust_management/migration_candidates.md`, `rust_management/standing.md`,
+`rust_management/standing.md`,
 `rust_management/docs/GAME_DEVELOPMENT_GUIDE.md`, `rust_management/docs/CODE_STANDARDS.md`,
 `rust_management/docs/MACROQUAD_TOOLKIT.md`.
 
@@ -22,11 +22,10 @@ Sources: `game_apps/tb_realms/` (React 19 + PHP/Slim + MySQL original),
   MySQL backend with a real schema (stocks, portfolios, transactions, watchlists,
   market_events, achievements) behind the shared WebHatchery login.
 
-- **Why it was picked:** `migration_candidates.md` — *"Fantasy stock-market/trading sim.
-  Distinct loop from `auction_game` (price speculation vs. one-shot auctions) — sells on
-  charts and numbers, not art."* Nothing in `standing.md` is a market game, and
-  `macroquad-toolkit` already ships `series.rs` — a time series that never grows and never
-  loses an extreme, written for exactly this and currently used only by `dragons_hoard`.
+- **Why it was picked:** Fantasy market speculation provides a different loop
+  from `auction_game`'s individual auctions. Charts and numbers carry the
+  decisions with modest artwork requirements. The toolkit's existing
+  `series.rs` provides bounded time-series storage that preserves extrema.
 
 - **The honest finding that shapes this whole port.** Two things are true about the
   original and both matter more than any feature list:

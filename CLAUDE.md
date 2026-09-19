@@ -59,9 +59,12 @@ cargo build --release --target wasm32-unknown-unknown      # WebGL
 .\scripts\capture_ui.ps1 -Scenes boards,trading,listing,chronicle,research,records
 ```
 
-The two `#[ignore]`d tests in `src/world/live/tests.rs` are the only ones needing a server;
-everything else runs offline, including the delta tests, which build their fixtures from a
-real seeded `WorldState` projected through the real spectator `Standing`.
+The ignored live-world tests need a server; other tests run offline, including
+delta fixtures built from a seeded `WorldState` projected through spectator
+`Standing`. The existing source-owned suites are legacy migration work: move
+all tests and test-only helpers into this crate's `tests/` directory, using the
+public library API, before expanding coverage. Follow `CODE_STANDARDS.md` §11
+for the five-case target across each major feature and justified exceptions.
 
 Never set `RUSTFLAGS` by hand — wasm link flags live in the workspace `.cargo/config.toml`
 and an env var replaces rather than merges them, forking the whole wasm dependency cache.

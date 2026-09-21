@@ -28,6 +28,7 @@ A collection of common utilities for Macroquad game development, extracted from 
 - **Hover tooltip**: delayed, fading tooltip state (`HoverTooltip`)
 - **Plaques**: ornamented title/menu buttons with corner marks and style hooks
 - **Menu cursor**: wrap-around keyboard selection for pause/settings menus
+- **Optional networking**: frame-polled JSON HTTP for native and WASM clients
 
 ## Usage
 
@@ -83,6 +84,23 @@ let runtime: GameConfig =
 
 Use `parse_json_labeled` when JSON already arrived as a string. Do not create project-local generic wrappers around `serde_json`; the toolkit provides consistent source names, line/column diagnostics, native/WASM loading, and embedded fallback support.
 
+### Client/server networking (`net` feature)
+
+Authoritative games can enable the optional transport without copying the
+cross-platform HTTP bridge:
+
+```toml
+macroquad-toolkit = { path = "../macroquad-toolkit", features = ["net"] }
+```
+
+The feature provides [`net::HttpClient`] and [`net::Pending<T>`]. The client
+owns its protocol structs, endpoint paths, session lifecycle, retry policy, and
+server; the toolkit owns only request construction, shared headers, JSON
+encoding/decoding, and frame-polled completion. Poll requests once per frame
+with a finite timeout, retain the last safe projection on failure, and retry
+through an application-owned cooldown. The shared RustGames publisher includes
+`quad-net.js` in WebGL packages when this feature is used.
+
 ### Input (`input` module)
 
 ```rust
@@ -117,6 +135,11 @@ if input.enter_pressed { activate(options[cursor.index()]); }
 ```
 
 ### UI (`ui` module)
+
+Choose screen composition with [UI_STYLE.md](UI_STYLE.md) before choosing widgets.
+These examples demonstrate APIs; they do not prescribe a panel, label, badge,
+or permanent control for every system. Preserve the current gameplay focus
+and use contextual disclosure for secondary information.
 
 ```rust
 use macroquad_toolkit::ui::*;
@@ -617,13 +640,14 @@ integration, including a thin per-game `scripts/capture_ui.ps1` wrapper.
 
 ### Source gate (`source_gate` module)
 
-The 800-line hard limit from `CODE_STANDARDS.md` §2.2 as a test, so plain
-`cargo test` enforces it locally and in CI. It counts non-test lines only:
-inline `#[cfg(test)] mod tests` blocks don't count, and extracted test files
-(`foo/tests.rs`, anything under a `tests/` directory inside `src/`) are exempt.
-Blank lines and comments in non-test code do count.
+The gate enforces `CODE_STANDARDS.md` §2.2 through `cargo test`: every Rust
+source file has an 800-total-line hard limit. Tests are never exempt;
+whitespace, comments, attributes, and inline test code all count. The scan
+includes test files, examples, benches, build scripts, and generated Rust
+sources under the supplied crate directory, skipping `.git/` and `target/`.
+Generated sources outside that scan still fall under the policy.
 
-Every game carries the same one-test integration file:
+Place this integration test in each crate's own `tests/` directory:
 
 ```rust
 // tests/code_standards.rs
@@ -636,16 +660,12 @@ fn source_files_stay_under_the_limit() {
 }
 ```
 
-Files already over the limit when the gate arrives are grandfathered by
-listing their manifest-relative paths (forward slashes) in the second
-argument. Grandfathered entries are ratcheted: when a listed file drops back
-under the limit, the gate fails until the entry is removed, so the list only
-shrinks. The gate also panics — rather than passing clean — if the path it is
-given has no `src/`.
+Always pass an empty exception list (`&[]`). The API retains support for
+legacy exceptions, but repository policy permits none: split oversized
+files by responsibility. An invalid project directory makes the gate fail.
 
-Sibling crates in the same repo can be gated from the one test file by
-passing their directories too, e.g.
-`assert_source_files_within_limit(concat!(env!("CARGO_MANIFEST_DIR"), "/kaiju_server"), &[])`.
+In a multi-crate repository, each member keeps this test beside its own
+`Cargo.toml` under `tests/`; run the relevant member tests to check each crate.
 
 ## Button Click Semantics
 

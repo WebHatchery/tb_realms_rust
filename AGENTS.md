@@ -1,60 +1,49 @@
-# RustGames Agent Instructions
+# RustGames Agent Checklist
 
-These instructions apply to all Rust game projects in this workspace.
+Applies to all Rust game projects in this workspace. `CODE_STANDARDS.md` is the detailed code authority; `UI_STYLE.md` governs game UI composition and visual review; `MACROQUAD_TOOLKIT.md` and `GAME_DEVELOPMENT_GUIDE.md` provide API examples and setup guidance. Edit shared documents in `rust_management/docs/`, then distribute them with its sync script; keep project-specific guidance in the project's README or `PROJECT_AGENTS.md`.
 
-## Project Standards
+## Implementation
 
-- Build games with Rust, `macroquad`, and the shared `macroquad-toolkit` by default.
-- Treat missing runtime, rendering, input, asset, or platform behavior as potential `macroquad-toolkit` upgrades before creating project-local alternatives.
-- Route JSON game-data parsing and file loading through `macroquad_toolkit::data_loader`; projects own their typed schemas and game-specific validation, while the toolkit owns embedded/runtime loading, platform differences, source-labeled errors, and fallback behavior. Do not add project-local generic JSON loader wrappers.
-- Only diverge from the shared toolkit when an existing project has a clear, established alternative or the need is genuinely game-specific.
-- Keep every `.rs` file at or below 800 total lines, with no exceptions or excluded sections. Split large files by responsibility before they become difficult to scan or test.
-- Prefer small modules with explicit ownership of input, update logic, rendering, assets, and game state.
-- Use Rust's named module source filenames (`foo.rs`, `foo/bar.rs`) instead of `foo/mod.rs`. Do not create new `mod.rs` files.
-- Keep gameplay logic deterministic where practical. Isolate randomness behind small helper functions or state-owned RNG.
-- Avoid broad refactors while making focused changes. Match the style, naming, and structure already present in each project.
-- Use clear error handling for asset loading, save/load, publishing, and platform integration.
-- Do not introduce new dependencies unless they remove real complexity or match an established project pattern.
-- Keep a root-level `catalog_thumbnail.png` for the WebHatchery games catalog. It should be a title-screen capture when available; `publish.ps1` deploys it as `<game_slug>/catalog_thumbnail.png`.
+- Use Rust, `macroquad`, and `macroquad-toolkit` by default. Consider missing shared capabilities as toolkit upgrades before adding local alternatives; diverge only for an established project pattern or a game-specific need.
+- Follow `CODE_STANDARDS.md`: cohesive modules, named module files (no new `mod.rs`), explicit state ownership, UI actions, clear errors, and no unused code.
+- Keep every `.rs` file within the 800-total-line hard limit, with no exemptions; follow §2.2 for counting and restructuring.
+- Load JSON game data through the toolkit; projects own schemas and semantic validation (§5.3).
+- Make browser gameplay fully touch-accessible, with visible controls and explicit tutorial instructions (§7.5).
+- Read `UI_STYLE.md` before designing or changing screens. Plan the current decision and dominant play area, emphasize relevant actions, and defer secondary information. Simplify existing screens before adding panels; recompose the template's demo UI for each new game.
+- Keep gameplay deterministic where practical; isolate randomness in small helpers or state-owned RNG.
+- Match existing style, avoid unrelated refactors, and add dependencies only when they remove real complexity or match an established pattern.
+- Keep a root `catalog_thumbnail.png` for publishing (§8.5).
 
-## Macroquad Conventions
+## Shared builds
 
-- Use `macroquad` for the runtime loop, input, drawing, textures, audio, and timing.
-- Ship browser games touch-first. A player must be able to start a new game and complete every required tutorial, core interaction, and recovery action using visible tap/click targets alone; a physical keyboard is never required.
-- Keyboard shortcuts may supplement touch controls, but they must not be the only path to an action. Do not show keyboard-command strings in player-facing HUDs, prompts, menus, notices, or tutorials unless the same text also names the visible touch control that performs the action.
-- Tutorial prompts must state the exact visible control or direct touch gesture needed next (for example, “Tap CONTINUE” or “Drag the map”). Never ask players to “dismiss,” “confirm,” or perform another action without a tappable target or an explicit touch instruction.
-- Keep drawing code separate from state mutation where possible.
-- Treat screen size, scaling, and camera transforms as first-class concerns. Games should remain playable at common desktop browser sizes.
-- Avoid hard-coded absolute positions unless they are intentionally tied to a fixed virtual resolution.
-- Load assets through project-local asset paths and keep missing asset behavior obvious during publishing.
+- Use `..\rust_management\cargo.ps1` for local build, check, test, Clippy and run commands from a game directory. Publishing and the shared capture wrapper acquire the same three-slot pool automatically. Formatting can use ordinary Cargo. In PowerShell quote the argument separator: `cargo.ps1 clippy '--' -D warnings` or `cargo.ps1 test '--' --nocapture`.
+- Do not change workspace membership, create nested workspaces, override target/build directories, or clean shared caches to work around contention. A busy pool waits; malformed registered members must be fixed in place.
+- Keep Macroquad pinned exactly to `=0.4.16`, including feature-bearing dependencies. See `rust_management/docs/CARGO_WORKSPACE.md` for the pool, sccache, editor setup and coordinated dependency upgrades.
+- Edit canonical root configuration in `rust_management/workspace/`, install it with `python rust_management/sync-workspace.py`, and record intentional root lock changes with `--capture-lock`.
 
-## Testing And Validation
+## Validation
 
-- Store unit tests in separate child files, never inline in implementation files. Use `#[cfg(test)] mod tests;` in `foo.rs` with the tests in `foo/tests.rs` so `use super::*` and private-item access continue to work. See `CODE_STANDARDS.md` §11.3.
-- Keep every test `.rs` file at or below 800 total lines. Split larger test suites into focused child modules before they reach the limit.
-- Use each project's `publish.ps1` script as the validation path.
-- Do not treat running a local instance or local dev server as the required test path unless the user explicitly asks for it.
-- After meaningful changes, run `.\publish.ps1` with no parameters from the affected project directory and report whether it passes.
-- If `publish.ps1` is missing, blocked, or fails for an unrelated environment reason, report that clearly instead of substituting an unrequested local run.
-- Store verification screenshots directly in `docs/verification/`, with no subfolders. When a capture represents the same screen or state as an existing image, replace that image instead of adding a duplicate.
+- Keep tests in each crate's `tests/` directory and strongly target five cases per major feature; preserve useful regression coverage (§11).
+- After meaningful game changes, run `.\publish.ps1` without parameters in the affected project and report the result or blocker. Do not substitute a local run unless requested (§8.3).
+- Run formatting, Clippy, source-size checks, tests, and publishing against the actual project checkout being changed and its real workspace/dependency configuration. Do not create or use an isolated project copy, copied source tree, temporary clone, or alternate manifest to bypass failures. A pass in such a copy is not validation of the actual project; report the original failure as a blocker instead (§8.3).
+- Store screenshots directly in `docs/verification/`, replacing captures of the same screen or state (§12).
+- For UI changes, complete the `UI_STYLE.md` visual review at normal and minimum supported sizes, including relevant dense states and touch interactions; report evidence and limitations.
 
-## Commit Messages
+## Workspace hygiene
 
-- Follow the catalog's commit convention, documented in `rust_management/docs/COMMIT_STYLE.md` (relative to the workspace root). It is not copied into game projects — read it there.
-- The shape: the subject narrates the change in the game's own voice and ends with a plain-terms parenthetical tag (subsystem, GDD section, and/or milestone); the body is honest prose covering problem, change, and reasoning.
-- Copy the shape, not another game's metaphors. Each game speaks in its own fiction, and the same technical concept should map to the same fictional term in every commit for that game.
-- A reader who ignores the metaphor and reads only the parenthetical must still know exactly what the commit does. Do not omit the parenthetical, and do not force a metaphor onto a trivial mechanical change.
-- No Conventional-Commits prefixes (`feat:`, `fix:`, `chore:`, `refactor:`).
-- `mytherra` and `stellar_legacy` are the worked exemplars; read either project's `git log` before your first commit in a new game.
-- After completing a requested implementation and its required validation, check the working tree and commit the finished changes unless the user explicitly asks to leave them uncommitted. Report the commit hash and validation result in the handoff.
-- When a request contains multiple independently useful changes, finish, validate, and commit each major change before beginning the next one. Keep exploratory edits uncommitted until their outcome is known, but do not combine unrelated fixes, UI polish, or refactors into one commit merely because they occurred in the same task.
-- Before each requested commit, stage every modified and untracked project file, including pre-existing changes not created during the current task. Do not leave local project changes uncommitted.
+- Do not create disposable review files, scratch projects, backup captures, or temporary cleanup directories anywhere, including OS temp directories. Moving them outside the repository is not a workaround. Use the existing tools and keep only required, durable verification evidence at its documented path (§12).
+- Capture directly to stable filenames in `docs/verification/` and replace the same screen/state in place. Do not create `baseline_tmp`, `review_*`, `review_cleanup_*`, or `.previous` copies. Read command output directly instead of writing ad hoc logs.
+- Never move files out of a repository to satisfy a clean Git status or evade staging rules. Preserve existing work in place; report a blocker if it cannot be handled within the task.
+- Never add dummy `Cargo.toml`, `lib.rs`, placeholder crates, or fabricated source files to make workspace checks pass. Workspace membership is explicit in `rust_management/workspace/Cargo.toml`. Inspect and report the offending path; do not modify another project's files or the workspace membership to conceal the failure.
+- If an unexpected directory blocks validation, determine its ownership and contents before acting. Remove only verified disposable artifacts created by the current task, within authorized scope; otherwise report the blocker. Do not repeatedly create/delete placeholder files or claim validation passed against a fabricated workspace.
+- Standard build outputs and internal files managed and cleaned by established tools are distinct from agent-created scratch files. Use the shared capture wrapper, keep its hidden-window default, wait for completion, and verify its launched game exits. If it fails or leaves a process running, report or fix the tool rather than inventing a temporary project or alternate capture pipeline.
 
-## File Size Rule
+## Commits
 
-- Keep every `.rs` file at or below 800 total lines. The limit applies without exception to implementation files, test files, generated Rust source, examples, build scripts, and benches.
-- Count every physical line, including tests, comments, attributes, and whitespace.
-- Treat a file reaching or approaching 800 lines as a restructure signal, not as a formatting target.
-- Do not preserve the limit by stripping useful spacing, compressing formatting, moving a single small function, or making other cosmetic line-count changes.
-- If a meaningful change would push a file over the limit, extract a cohesive responsibility into one or more nearby modules before or alongside the change.
-- If any file is already over 800 lines, make the restructure part of the current task before considering the task complete.
+- Follow `rust_management/docs/COMMIT_STYLE.md` (relative to the workspace root): a subject in the game's voice ending with a clear parenthetical tag, an honest explanatory body, and AI co-authorship. No Conventional-Commits prefixes or forced metaphors for mechanical changes.
+- Read `mytherra` or `stellar_legacy` history before the first commit in a new game.
+- Finish, validate, and commit each independently useful major change before starting the next. Keep exploratory edits uncommitted until their outcome is known.
+- After implementation and validation, stage and commit all modified and untracked project files, including pre-existing changes, unless the user asks otherwise.
+- Never cherry-pick a subset of touched files or hunks to commit, or leave changes uncommitted when finishing. Preserve existing work; do not discard changes just to make the working tree clean.
+- Work directly on `master`; do not create a branch unless the user explicitly requests one.
+- Before finishing, verify that `git status --short` is empty and report the commit hash and validation results. If a blocker prevents committing, report it explicitly rather than claiming the work is complete.

@@ -1,7 +1,6 @@
 {
   "title": "Tradeborn Realms",
   "wasm": "tb_realms",
-  "roost_slug": "rust_tb_realms",
   "status": {
     "text": "In Development",
     "class": "in-development"

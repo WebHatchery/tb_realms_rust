@@ -12,10 +12,20 @@ This guide covers both creating new games and migrating existing web application
 
 ### New Game Setup
 
-```bash
-cargo new my_game
-cd my_game
+Start from the working template and follow its README's rename checklist:
+
+```powershell
+# Run from the RustGames workspace root.
+Copy-Item .\rust_management\template .\my_game -Recurse
+# Add my_game to rust_management/workspace/Cargo.toml members, then:
+python .\rust_management\sync-workspace.py
+Set-Location .\my_game
 ```
+
+Read [UI_STYLE.md](UI_STYLE.md) and record its screen brief in the new game's
+GDD or README before building the first screen. The template demonstrates
+toolkit integration; recompose its demo UI around the new game's current
+decision instead of carrying its panels and permanent help into normal play.
 
 ### Dependencies (`Cargo.toml`)
 
@@ -26,13 +36,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.4"
+macroquad = "=0.4.16"
 macroquad-toolkit = { path = "../macroquad-toolkit" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ```
 
-> **Note**: Profile settings (`[profile.release]`) are defined at the workspace root.
+> **Note**: Root configuration is versioned in `rust_management/workspace/`. Use `..\rust_management\cargo.ps1` for local builds/checks/tests/run so simultaneous work shares a bounded three-slot pool and sccache. Publishing and capture use it automatically. Keep the exact Macroquad pin for the shared browser runtime; see `rust_management/docs/CARGO_WORKSPACE.md`.
 
 ---
 
@@ -62,6 +72,30 @@ serde_json = "1.0"
 
 > Macroquad should remain a *thin* rendering/input layer.
 
+### Client/server games
+
+For a persistent multiplayer game, keep the boundary explicit from the first
+slice:
+
+- the client renders a server-owned projection and sends intent-like commands;
+- the server owns validation, simulation time, shared world state, and durable
+  persistence;
+- a small protocol crate contains the wire types used by both sides;
+- the client keeps only UI preferences and credentials locally, unless an
+  offline mode is deliberately part of the design.
+
+Enable the toolkit's optional `net` feature for the client transport:
+
+```toml
+macroquad-toolkit = { path = "../macroquad-toolkit", features = ["net"] }
+```
+
+`macroquad_toolkit::net::HttpClient` and `Pending<T>` provide non-blocking JSON
+HTTP on native and WASM. Games still implement their own endpoint vocabulary,
+protocol types, session handshake, reconnect state, server authority, CORS,
+authentication verification, and database schema. The shared publisher supplies
+the `quad-net.js` browser bridge for WebGL packages.
+
 ---
 
 ## Project Structure
@@ -70,8 +104,10 @@ serde_json = "1.0"
 game_name/
 ├── Cargo.toml
 ├── CODE_STANDARDS.md       # Coding standards
+├── UI_STYLE.md             # Screen composition and visual review
 ├── publish.ps1             # Build & deploy script
-├── index.html              # WebGL host page
+├── game_page.json          # Data for the generated WebGL host page
+├── catalog_thumbnail.png   # 16:9 catalog title/menu image
 ├── src/
 │   ├── main.rs             # Entry point, window config
 │   ├── game.rs             # Game loop & state machine
@@ -205,6 +241,12 @@ impl Game {
 
 ## UI: Immediate Mode
 
+Follow [UI_STYLE.md](UI_STYLE.md) for player decisions, hierarchy, contextual
+information, camera framing, and responsive layout. Use its subtraction pass
+when improving an existing screen and its visual review before accepting UI
+changes. The examples below explain implementation mechanics, not a finished
+screen design; use toolkit widgets and input helpers in production UI.
+
 ### Layout (Replacing CSS Flexbox)
 
 **React (CSS):**
@@ -322,7 +364,7 @@ Use database crates only for native/server code. Keep WebGL clients on JSON data
 
 Every game MUST have:
 - `publish.ps1` – Build and deploy script
-- `index.html` – WebGL host page
+- `game_page.json` – Per-game data for the generated WebGL host page
 - `catalog_thumbnail.png` – Root-level catalog thumbnail, preferably a title-screen capture. The publisher deploys this as `<game_slug>/catalog_thumbnail.png`.
 
 ### Validation
@@ -337,36 +379,36 @@ Run this with no parameters from the affected project directory after meaningful
 
 ```bash
 # Windows release
-cargo build --release
+..\rust_management\cargo.ps1 build --release
 
 # WebGL/WASM
-cargo build --release --target wasm32-unknown-unknown
+..\rust_management\cargo.ps1 build --release --target wasm32-unknown-unknown
 ```
 
-### Web Template (`index.html`)
+### Generated Web Page (`game_page.json`)
 
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>My Game | Web Hatchery</title>
-    <link rel="stylesheet" href="../shared.css">
-    <style>
-        .game-container canvas {
-            image-rendering: pixelated;
-        }
-    </style>
-</head>
-<body>
-    <div class="game-page">
-        <canvas id="glcanvas" tabindex="1"></canvas>
-    </div>
-    <script src="mq_js_bundle.js"></script>
-    <script>load("my_game.wasm");</script>
-</body>
-</html>
+Do not hand-maintain a game-root `index.html`. The publisher combines the
+canonical `rust_management/web/index.template.html` shell with a small
+project-root `game_page.json` and writes `dist/webgl/index.html`.
+
+Only `title` is required; the publisher derives defaults for omitted values:
+
+```json
+{
+  "title": "My Game",
+  "wasm": "my_game",
+  "status": { "text": "In Development", "class": "in-development" },
+  "controls_hint": "Tap the visible controls to play",
+  "canvas_rendering": "pixelated",
+  "about": ["<p>A short player-facing description.</p>"],
+  "controls": [
+    { "key": "Touch / Mouse", "desc": "Select and activate controls" }
+  ]
+}
 ```
+
+See `rust_management/web/README.md` for the complete schema. Shared browser
+behavior belongs in the canonical template or shared CSS, not per-game CSS/JS.
 
 ### Catalog Thumbnail
 
@@ -417,25 +459,28 @@ Use a JSON catalog for managing placeholder-to-generated-image transitions.
 
 ### New Game
 
-1. [ ] `cargo new game_name`
-2. [ ] Add dependencies to `Cargo.toml`
-3. [ ] Create folder structure (`src/state/`, `src/data/`, etc.)
-4. [ ] Implement `GameState` and `StateTransition` enums
-5. [ ] Create `Game` struct with update/draw loop
-6. [ ] Set up `assets/` folder
-7. [ ] Copy `publish.ps1` from template
-8. [ ] Create `index.html` with correct WASM filename
-9. [ ] Implement save/load system
+1. [ ] Copy `rust_management/template/` to a new workspace-root sibling folder
+2. [ ] Rename the package and update the template data files
+3. [ ] Confirm the toolkit path dependency resolves to `../macroquad-toolkit`
+4. [ ] Read `UI_STYLE.md`, record the screen brief, and adapt the template's demo layout to the current gameplay decision
+5. [ ] Implement `GameState` and `StateTransition` enums
+6. [ ] Create `Game` struct with update/draw loop
+7. [ ] Set up `assets/` folder
+8. [ ] Update the template `publish.ps1` wrapper if shared parameters change
+9. [ ] Configure `game_page.json` and add `catalog_thumbnail.png`
+10. [ ] Implement save/load system
+11. [ ] Complete the `UI_STYLE.md` visual review and the affected game's publish validation
 
 ### Migration (Web → Rust)
 
 1. [ ] Define Rust structs for game entities
 2. [ ] Set up `macroquad::main` entry point
-3. [ ] Copy `publish.ps1` and `index.html` from template
+3. [ ] Copy `publish.ps1` and `game_page.json` from the template
 4. [ ] Port PHP/backend logic to Rust functions
-5. [ ] Rebuild React UI using immediate-mode
+5. [ ] Redesign screens around the current gameplay decision with `UI_STYLE.md`, then implement immediate-mode views
 6. [ ] Migrate MySQL data to JSON or SQLite
-7. [ ] Wire UI to modify game state
+7. [ ] Wire UI intents to game-state action handlers
+8. [ ] Complete the `UI_STYLE.md` visual review and the affected game's publish validation
 
 ---
 

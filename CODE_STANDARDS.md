@@ -25,13 +25,10 @@ Code should be easy to debug and extend.
 If a pattern already exists in the codebase, follow it even if you dislike it. A consistent codebase is more valuable than a perfect one.
 
 ### 1.3 Data-Driven Design
-All game constants, balance values, and static data should be defined in JSON files under `assets/`. Load this data through `macroquad_toolkit::data_loader` using Serde-backed project schemas. The toolkit owns generic parsing, embedded/runtime file loading, platform differences, source-labeled diagnostics, and fallback behavior; project code owns only its data types and game-specific validation. Do not create project-local generic JSON loader wrappers or call `serde_json::from_str` directly for game-data files. Avoid hardcoding values in Rust code; reference loaded data structures instead.
+Keep game content and configuration in JSON; see §5.3 for loading and validation rules.
 
 ### 1.4 No Unused Code
-- Remove unused variables, fields, and functions immediately
-- Never suppress unused warnings with `_` prefixes on struct fields
-- If a field is unused, delete it - don't mark it as unused
-- Parameter prefixes with `_` are acceptable only when required by trait signatures
+Delete unused variables, fields, and functions; never hide them with `_` prefixes. An unused parameter may use an `_` prefix only when a required trait or API signature prevents removing it.
 
 ## 2. Project Structure Rules
 
@@ -64,18 +61,15 @@ Each module/subdirectory owns a single conceptual domain:
 - `screens/` – Screen-specific rendering (if separated from main.rs)
 
 **Cross-Domain Rules:**
-- ❌ UI must never mutate game state directly
-- ❌ Engine services should be stateless - receive state, return results
-- ❌ Data module has no knowledge of engine or UI
-- ✅ All domains can read from `data/` types
-- ✅ State mutations happen only in main.rs via clearly defined actions
+- Data types have no knowledge of engine or UI; all domains may read them.
+- See §5.1 for state ownership and §7 for UI actions.
 
 ### 2.2 File Size Guideline
-- Target: 200–400 lines per file
-- Soft limit: 600 lines
-- Hard limit: 800 total lines for every `.rs` file, with no exceptions
-- If a file grows beyond this, split by responsibility.
-- Count every physical line, including tests, comments, attributes, and whitespace. The hard limit applies equally to implementation files, test files, generated Rust source, examples, build scripts, and benches.
+- Target 200–400 lines per file; begin planning a split at 600.
+- Every `.rs` file has a hard limit of 800 total physical lines, including whitespace, comments, attributes, and tests. Implementation, test, generated source, example, build-script, and bench files have no exemptions.
+- Extract a cohesive responsibility before a change exceeds the limit. Restructure any existing oversized file encountered during the task before completing it.
+- Never meet the limit by stripping spacing, compressing formatting, or moving a single small function solely to reduce the count.
+- Use the source gate described in `MACROQUAD_TOOLKIT.md`; exception lists must be empty.
 
 ### 2.3 Module Source Filenames
 - Use Rust's named module source filenames: `foo.rs` for `mod foo;`, and `foo/bar.rs` for `mod bar;` inside `foo.rs`.
@@ -89,11 +83,13 @@ Each module/subdirectory owns a single conceptual domain:
 game_name/
 ├── Cargo.toml              # Project manifest
 ├── CODE_STANDARDS.md       # This file
+├── UI_STYLE.md             # Screen composition and visual review
 ├── src/
-│   ├── main.rs             # Entry point, game loop, screen rendering
+│   ├── lib.rs              # Public game logic used by the binary and tests
+│   ├── main.rs             # Entry point and game loop
 │   ├── data.rs             # Data module root and re-exports
 │   ├── data/               # Data child modules
-│   │   ├── loader.rs       # JSON deserialization
+│   │   ├── schema.rs       # Typed schemas and game-specific validation
 │   │   └── constants.rs    # Game constants structures
 │   ├── engine.rs           # Engine module root and re-exports
 │   ├── engine/             # Engine child modules
@@ -107,6 +103,8 @@ game_name/
 │   │   ├── core.rs
 │   │   └── components.rs
 │   └── screens.rs          # Screen renderers module root (optional)
+├── tests/                  # This crate's tests and test-only helpers
+│   └── gameplay.rs         # Tests through the public library API
 ├── assets/                 # Game data
 │   ├── constants.json      # Balance values
 │   └── localization/       # Text strings
@@ -162,10 +160,10 @@ Each function should answer one question or perform one action.
 ## 5. Data & State Management
 
 ### 5.1 Game State Ownership
-- `GameState` owns the current game state  
-- `PlayerStats` owns persistent progression  
-- Mutation happens through methods on `Game` struct in main.rs  
-- Services return results; they don't mutate state directly  
+- `GameState` owns current state; `PlayerStats` owns persistent progression.
+- `Game` coordinates state mutations through explicit actions and transitions; action handlers may live in dedicated modules.
+- Engine services receive state and return results rather than owning mutable state.
+- UI reads state and returns intents for the dispatcher to apply (§7).
 
 ### 5.2 Prefer Plain Data
 Use structs with clear fields. Avoid overly clever enums with embedded logic unless they model a real state machine.  
@@ -176,12 +174,10 @@ Game data should be:
 - Immutable after loading from JSON  
 
 ### 5.3 Data-Driven Design
-- All game balance and configuration in JSON under `assets/`
-- Load data at application startup; data is embedded at compile time
-- Use structs that mirror JSON structure for type safety
-- Use `macroquad_toolkit::include_json!` for embedded JSON or the typed functions in `macroquad_toolkit::data_loader` for runtime/native loading. Keep platform branching and generic parse/error handling out of projects.
-- Keep semantic validation project-local after deserialization: IDs, references, balance invariants, and game rules belong to the game rather than the loader.
-- Never hardcode magic numbers; reference loaded config data
+- Store game constants, balance, configuration, content, and player-facing text as JSON under `assets/`; reference loaded values rather than hardcoding them.
+- Load at startup through `macroquad_toolkit::include_json!` for embedded data or typed `macroquad_toolkit::data_loader` functions for runtime/native loading.
+- Projects own Serde-backed schemas and semantic validation: IDs, references, balance invariants, and game rules.
+- The toolkit owns generic parsing, file loading, platform branching, source-labeled diagnostics, and fallback behavior. Do not create generic project-local loader wrappers or call `serde_json::from_str` directly for game-data files.
 
 ### 5.4 Enums for Game Phases
 Use enums to model distinct game states:
@@ -211,6 +207,10 @@ Use `eprintln!` for error conditions that should be visible during development b
 
 ## 7. UI Code (Macroquad-Toolkit)
 
+Read [UI_STYLE.md](UI_STYLE.md) before designing or changing a screen. It defines
+the required screen brief, visual hierarchy, progressive disclosure, template
+adaptation, and visual review. The rules below govern implementation.
+
 ### 7.1 UI Is Dumb
 UI code:  
 - Reads game state  
@@ -234,71 +234,56 @@ pub enum UiAction {
 - Each component is a pure function: `fn draw_thing(state: &State) -> Option<UiAction>`
 
 ### 7.4 Macroquad-Toolkit Usage
+Use shared toolkit widgets, input helpers, and palettes. Prefer buttons that fire on release; use press actions only when immediate feedback is intentional. See `MACROQUAD_TOOLKIT.md` for imports, API examples, and button semantics.
 
-Use `macroquad-toolkit` for common UI patterns. Prefer `use macroquad_toolkit::prelude::*;` for common helpers, or explicit `macroquad_toolkit::ui::*` imports.
-
-**Available Modules:**
-- `macroquad_toolkit::ui::button()` - Standard clickable button (fires on release)
-- `macroquad_toolkit::ui::button_on_press()` - Button that fires on mouse down
-- `macroquad_toolkit::ui::button_styled()` - Button with custom styling
-- `macroquad_toolkit::ui::panel()` - Draws a panel with optional title
-- `macroquad_toolkit::ui::progress_bar()` - Progress indicator
-- `macroquad_toolkit::colors::dark::*` - Standard dark theme colors
-- `macroquad_toolkit::input::*` - Mouse/keyboard input helpers
-
-**Button Click Semantics:**
-```rust
-// Standard button - fires on mouse RELEASE (safer, allows cancel)
-if button(x, y, w, h, "Click Me") {
-    return UiAction::DoThing;
-}
-
-// Press button - fires on mouse DOWN (instant feedback)
-if button_on_press(x, y, w, h, "Emergency", &style) {
-    // Immediate action
-}
-```
-
-**Color Palette:**
-```rust
-use macroquad_toolkit::colors::dark;
-
-clear_background(dark::BACKGROUND);  // Standard background
-draw_rectangle(x, y, w, h, dark::PANEL);  // Panel color
-draw_text("Hello", x, y, 20.0, dark::TEXT);  // Text color
-// Also: dark::ACCENT, dark::POSITIVE, dark::WARNING, dark::NEGATIVE
-```
-
-**Input Helpers:**
-```rust
-use macroquad_toolkit::input::*;
-
-if is_hovered(x, y, w, h) { /* Mouse over area */ }
-if was_clicked(x, y, w, h) { /* Left click released on area */ }
-if was_pressed(x, y, w, h) { /* Left click pressed on area */ }
-```
+### 7.5 Browser Controls and Layout
+- Games are touch-first: starting, tutorials, core interactions, and recovery must work through visible tap/click controls without a physical keyboard.
+- Keyboard shortcuts may supplement controls. Player-facing shortcut text must also name the equivalent visible touch control.
+- Tutorial prompts name the exact visible control or gesture needed next, such as “Tap CONTINUE” or “Drag the map.”
+- Dismiss completed tutorial prompts and keep help reopenable; preserve visible, understandable controls during normal play (`UI_STYLE.md` §5).
+- Keep drawing separate from mutation. Support common desktop browser sizes and responsive scaling; use fixed positions only with an intentional virtual resolution.
 
 ## 8. Deployment & Web Standards
 
 ### 8.1 Required Files
 Every game must have these files for deployment:
 - `publish.ps1` – Build and deploy script
-- `index.html` – WebGL host page
+- `game_page.json` – Per-game metadata used to generate the WebGL host page
+- `catalog_thumbnail.png` – Root-level catalog image
 
 ### 8.2 Build Targets
+Use the shared `..\rust_management\cargo.ps1` launcher for concurrent local builds, checks, tests and Clippy. It leases a bounded shared build slot and uses sccache when installed; it does not copy source or change workspace membership. Publishing and capture integrate it automatically. See `rust_management/docs/CARGO_WORKSPACE.md`.
+
 The game must build for:
-- **Windows**: `cargo build --release`
-- **Web/WASM**: `cargo build --release --target wasm32-unknown-unknown`
+- **Windows**: `..\rust_management\cargo.ps1 build --release`
+- **Web/WASM**: `..\rust_management\cargo.ps1 build --release --target wasm32-unknown-unknown`
 
 ### 8.3 Validation
-After meaningful changes, run `.\publish.ps1` with no parameters from the affected project directory.
+After meaningful game changes, run `.\publish.ps1` with no parameters from the affected project directory and report the result. If the script is missing, blocked, or fails for an unrelated environment reason, report that limitation. A local instance or dev server is not a substitute unless the user requests it.
+
+All validation must run against the actual project checkout being changed, with
+its real workspace and dependency configuration. Do not create or use isolated
+project copies, copied source trees, temporary clones, alternate manifests, or
+fabricated workspaces to get formatting, Clippy, source-size gates, tests, or
+publishing to pass. Do not detach a game from its workspace or change dependency
+paths merely to bypass a validation failure.
+
+For example, "Validation passed in the isolated project copy: formatting,
+clippy with `-D warnings`, source-size gate, and 15 gameplay tests" is not an
+acceptable substitute for validating the changed checkout. Even an honestly
+labelled isolated-copy result does not satisfy these requirements. Run the
+checks in the actual checkout; if its workspace cannot load, report that error
+and identify the blocked checks. Fix the real cause within the task's scope,
+then rerun validation there. Never claim completion based on a copied project.
+
+Use project-local asset paths and make missing assets and loading failures clear during publishing.
 
 ### 8.4 WebGL Requirements
-The `index.html` must:
-- Load `mq_js_bundle.js` (Miniquad loader)
-- Call `load("game_name.wasm")`
-- Include canvas with `id="glcanvas"`
-- Use `image-rendering: pixelated` for pixel art
+The publisher generates `dist/webgl/index.html` from
+`rust_management/web/index.template.html` and the game's `game_page.json`.
+Do not maintain a project-root `index.html` for a migrated game. Configure the
+title, WASM name, controls, page copy, canvas behavior, and Project Roost slug
+in `game_page.json`; change the shared template only for catalog-wide behavior.
 
 ### 8.5 Catalog Thumbnail
 Each published game should keep `catalog_thumbnail.png` in the project root. Use a 16:9 title-screen or main-menu capture. The shared publisher deploys the file as `<game_slug>/catalog_thumbnail.png`, and the WebHatchery games catalog uses that stable path for card thumbnails.
@@ -329,12 +314,6 @@ Each module should contain a short `//!` comment explaining its purpose:
 - Avoid variable shadowing (hiding)
 - Do not declare a new variable with the same name as an existing one in the same scope
 
-### 10.4 Unused Code
-- Remove unused variables immediately
-- Remove unused struct fields immediately  
-- Never use `_` prefix on struct fields to suppress warnings
-- `_` prefix on function parameters is acceptable when required by API
-
 ## 11. Testing Guidelines
 
 ### 11.1 What to Test
@@ -349,31 +328,37 @@ Focus tests on:
 - Avoid complex setups  
 - If a test is hard to write, the code is probably too tangled.
 
-### 11.3 Test Placement
-Unit tests live in the crate, next to the code they cover, but always in a separate child file. Never embed a test module body in an implementation file.
+### 11.3 Feature Test Target
+- Strongly target no more than five `#[test]` cases per major feature: one cohesive responsibility, regardless of how its tests are split or named.
+- Prefer high-value behavior and regression tests. Consolidate related inputs with table-driven assertions; do not bundle unrelated checks or delete useful coverage to meet the target.
+- Before committing, review affected feature suites. If more than five cases are needed, briefly explain why distinct coverage warrants them.
 
-Declare a child module from the implementation file and place its body in the corresponding child source:
-
-**When a test module dominates its file, extract it to a child module** — not to `tests/`:
-
-```rust
-// src/simulation.rs
-#[cfg(test)]
-mod tests;          // -> src/simulation/tests.rs
-```
-
-This keeps `use super::*` and same-crate access while separating tests from implementation. It follows the named-module rule in §2.3, so use `foo/tests.rs`, never `foo/tests/mod.rs`.
-
-**Do not use a crate-root `tests/` directory for unit tests.** Files there are integration tests: each compiles and links as a separate crate and can only reach the crate's public API. Reserve that directory for genuine integration or end-to-end tests.
-
-Every test source file must remain at or below 800 total lines. Split a larger suite into focused child modules; there are no test-file exceptions to §2.2.
+### 11.4 Test Placement
+- Each crate owns a `tests/` directory beside its `Cargo.toml`, including member crates in multi-crate repositories. Keep all tests and test-only helpers there.
+- Do not add `#[cfg(test)]`, `mod tests`, test helpers, or test source files under `src/`.
+- Tests exercise the crate's public API. For a binary-only game, expose testable logic through `src/lib.rs` and have `main.rs` use that library; keep internals private unless an intentional public seam is needed.
+- Existing `src/**/tests.rs` files are legacy migration work. Migrate them as a separate change before expanding coverage.
+- Split large suites by responsibility while preserving the feature target (§11.3) and file-size rule (§2.2).
 
 ## 12. Verification Artifacts
 
+- For UI changes, follow the visual and interaction review in `UI_STYLE.md` §9; inspect normal and minimum supported sizes and relevant dense states. Compilation and geometry checks alone do not verify usability.
 - Store verification screenshots directly in `docs/verification/`.
 - Do not create screenshot subfolders under `docs/verification/`.
 - If a new capture represents the same screen or state as an existing screenshot, replace the existing image instead of keeping duplicates.
+- Do not create disposable review files, scratch projects, backup screenshots, or cleanup folders, either inside the workspace or elsewhere. Do not move files out of a repository to make Git status clean. Preserve existing work and report blockers instead.
+- Use existing tooling and direct command output. Established tools may manage their own internal capture manifests, logs, and normal build outputs; do not create an ad hoc parallel set of temporary artifacts.
+- Never fabricate a `Cargo.toml`, source file, or placeholder crate to bypass a workspace failure. A missing manifest in an unexpected directory is a workspace hygiene problem to investigate and report, not a request to invent a project.
 
-## 13. Final Rule
+Correct capture workflow (from the game directory):
 
-If a piece of code feels fragile, confusing, or brittle, it probably is. Refactor early. Leave the code calmer than you found it.
+```powershell
+# Capture required evidence directly to its stable, documented location.
+# Use scene names supported by this game; the wrapper is hidden by default.
+& ..\macroquad-toolkit\scripts\capture_ui.ps1 -Scenes gameplay -OutputDir docs\verification
+# Wait for completion and check the exit result before inspecting the image.
+if (-not $?) { throw 'Capture failed; investigate the reported error.' }
+# Re-capture to the same filename when iterating; do not create backup copies.
+# If workspace discovery fails, inspect/report the offending directory.
+# Never create a dummy Cargo.toml or move files into a sibling cleanup folder.
+```

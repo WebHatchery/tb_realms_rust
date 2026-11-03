@@ -6,63 +6,33 @@
 
 This document defines the centrally maintained coding standards for Macroquad game projects. Keep project-local copies identical to the canonical `docs/CODE_STANDARDS.md`; put project-specific guidance in the project's README or another local documentation file instead.
 
-These standards prioritize:  
-- Readability over cleverness  
-- Data-driven design over hardcoded values  
-- Clean state management  
-- Modular services for game logic  
-- A clear mental model for game phases and transitions  
-
 ## 1. Core Philosophy
 
 ### 1.1 Write for Maintainability
-Code should be easy to debug and extend.  
-- Prefer obvious, straightforward code  
-- Avoid hidden state or side effects  
-- If a junior Rust developer can understand the flow, you are doing it right.
+Prefer obvious, readable code with no hidden state or side effects.
 
 ### 1.2 Consistency Beats Preference
-If a pattern already exists in the codebase, follow it even if you dislike it. A consistent codebase is more valuable than a perfect one.
+Match established patterns and avoid unrelated refactors. Add dependencies only
+when they remove real complexity or match an established project pattern. Keep
+gameplay deterministic where practical; isolate randomness in small helpers or
+state-owned RNG.
 
 ### 1.3 Data-Driven Design
-Keep game content and configuration in JSON; see §5.3 for loading and validation rules.
+Keep game content and configuration in JSON; see section 5.3.
 
 ### 1.4 No Unused Code
-Delete unused variables, fields, and functions; never hide them with `_` prefixes. An unused parameter may use an `_` prefix only when a required trait or API signature prevents removing it.
+Delete unused variables, fields, and functions; never hide them with `_` prefixes.
+Unused parameters may use `_` only when a required trait/API signature prevents removal.
 
 ## 2. Project Structure Rules
 
 ### 2.1 Module Responsibilities
-Each module/subdirectory owns a single conceptual domain:
-
-**Root Level:**
-- `main.rs` – Entry point, game loop, phase transitions, and high-level coordination
-
-**Subdirectories:**
-- `data/` – Data structures and JSON loading
-  - Type definitions for game entities
-  - Constants and configuration structures
-
-- `engine/` – Game logic services (stateless where possible)
-  - Core game calculations
-  - Entity management and state machines
-  - Visual effects (particles, transitions)
-
-- `state/` – Game state management
-  - Current game state
-  - Persistent player progression
-  - Save/load functionality
-
-- `ui/` – User interface components
-  - Base UI utilities and styling
-  - Reusable UI widgets
-  - Uses macroquad-toolkit for buttons and interactions
-
-- `screens/` – Screen-specific rendering (if separated from main.rs)
-
-**Cross-Domain Rules:**
-- Data types have no knowledge of engine or UI; all domains may read them.
-- See §5.1 for state ownership and §7 for UI actions.
+Each module owns one domain: `main.rs` coordinates the loop and transitions;
+`data/` owns schemas/loading; `engine/` owns calculations, entity/state-machine
+services and effects; `state/` owns current/persistent state and save/load;
+`ui/` owns toolkit-based views/widgets; optional `screens/` owns screen rendering.
+Data types know neither engine nor UI. State ownership and UI actions follow
+sections 5.1 and 7.
 
 ### 2.2 File Size Guideline
 - Target 200–400 lines per file; begin planning a split at 600.
@@ -79,37 +49,11 @@ Each module/subdirectory owns a single conceptual domain:
 
 ### 2.4 Folder Structure
 
-```
-game_name/
-├── Cargo.toml              # Project manifest
-├── CODE_STANDARDS.md       # This file
-├── UI_STYLE.md             # Screen composition and visual review
-├── src/
-│   ├── lib.rs              # Public game logic used by the binary and tests
-│   ├── main.rs             # Entry point and game loop
-│   ├── data.rs             # Data module root and re-exports
-│   ├── data/               # Data child modules
-│   │   ├── schema.rs       # Typed schemas and game-specific validation
-│   │   └── constants.rs    # Game constants structures
-│   ├── engine.rs           # Engine module root and re-exports
-│   ├── engine/             # Engine child modules
-│   │   └── game_engine.rs  # Core calculations
-│   ├── state.rs            # State module root and re-exports
-│   ├── state/              # State child modules
-│   │   ├── game_state.rs   # Current game state
-│   │   └── persistence.rs  # Save/load
-│   ├── ui.rs               # UI module root and re-exports
-│   ├── ui/                 # UI child modules
-│   │   ├── core.rs
-│   │   └── components.rs
-│   └── screens.rs          # Screen renderers module root (optional)
-├── tests/                  # This crate's tests and test-only helpers
-│   └── gameplay.rs         # Tests through the public library API
-├── assets/                 # Game data
-│   ├── constants.json      # Balance values
-│   └── localization/       # Text strings
-└── .gitignore
-```
+Use `src/main.rs` plus `src/lib.rs` for logic shared by binary and tests;
+`src/data.rs`, `engine.rs`, `state.rs`, and `ui.rs` are named module roots with
+children under matching directories. Keep tests beside `Cargo.toml` in `tests/`
+and JSON content under `assets/` (for example `constants.json`, `localization/`).
+The working template demonstrates the layout; follow existing project structure.
 
 ## 3. Naming Conventions
 
@@ -180,17 +124,10 @@ Game data should be:
 - The toolkit owns generic parsing, file loading, platform branching, source-labeled diagnostics, and fallback behavior. Do not create generic project-local loader wrappers or call `serde_json::from_str` directly for game-data files.
 
 ### 5.4 Enums for Game Phases
-Use enums to model distinct game states:
-```rust
-pub enum GamePhase {
-    Loading,
-    MainMenu,
-    Playing,
-    Paused,
-    GameOver,
-    // Add game-specific phases
-}
-```
+Use enums for real phases, e.g. loading, menu, playing, paused, and game over.
+Only one phase is active; transitions are explicit, with no magic callbacks or
+shared mutable globals. `Game` calls the active state's update/draw and applies
+returned transitions.
 
 ## 6. Error Handling
 
@@ -212,21 +149,11 @@ the required screen brief, visual hierarchy, progressive disclosure, template
 adaptation, and visual review. The rules below govern implementation.
 
 ### 7.1 UI Is Dumb
-UI code:  
-- Reads game state  
-- Returns actions/intents  
-- It should never contain game logic.  
+UI reads state and returns actions; it never contains game logic or mutates state.
 
 ### 7.2 Action Pattern
-UI components return `Option<UiAction>` to signal user intent:
-```rust
-pub enum UiAction {
-    StartGame,
-    Pause,
-    Resume,
-    // Add game-specific actions
-}
-```
+Components return `Option<UiAction>` (e.g. start, pause, resume) for the dispatcher
+to apply. Add an intent rather than reaching into state from a panel.
 
 ### 7.3 Component Organization
 - `core.rs` – Color schemes, fonts, base styling  
@@ -259,24 +186,29 @@ The game must build for:
 - **Web/WASM**: `..\rust_management\cargo.ps1 build --release --target wasm32-unknown-unknown`
 
 ### 8.3 Validation
-After meaningful game changes, run `.\publish.ps1` with no parameters from the affected project directory and report the result. If the script is missing, blocked, or fails for an unrelated environment reason, report that limitation. A local instance or dev server is not a substitute unless the user requests it.
 
-All validation must run against the actual project checkout being changed, with
-its real workspace and dependency configuration. Do not create or use isolated
-project copies, copied source trees, temporary clones, alternate manifests, or
-fabricated workspaces to get formatting, Clippy, source-size gates, tests, or
-publishing to pass. Do not detach a game from its workspace or change dependency
-paths merely to bypass a validation failure.
+Validate proportionately for a prototype; commit each coherent, buildable slice promptly.
 
-For example, "Validation passed in the isolated project copy: formatting,
-clippy with `-D warnings`, source-size gate, and 15 gameplay tests" is not an
-acceptable substitute for validating the changed checkout. Even an honestly
-labelled isolated-copy result does not satisfy these requirements. Run the
-checks in the actual checkout; if its workspace cannot load, report that error
-and identify the blocked checks. Fix the real cause within the task's scope,
-then rerun validation there. Never claim completion based on a copied project.
+- **Every Rust slice:** review the full/staged diff; check formatting, strict Clippy (`--all-targets --all-features -- -D warnings`), source-size gates, and focused existing tests for changed behavior in the affected crate(s); do not write new ones by default (§11). Fix errors and warnings; do not suppress them or disable checks to pass. If no behavioral test applies (for example a visual-only change), explain the relevant build/manual evidence instead of adding redundant tests.
+- **Broader checks when justified:** use integration tests or the full affected-project/member suite for cross-cutting state, simulation, shared API/platform changes, a meaningful integration boundary, or release acceptance. State the risk/trigger; a full suite is not required for every slice. Reuse valid results for unchanged code/configuration/dependencies; rerun affected checks after relevant changes or unresolved failures. Avoid running focused tests immediately before a full suite containing them unless useful for diagnosis.
+- **Changed UI only:** inspect affected screens/states and exercise affected interactions. Check normal/minimum sizes where layout, scaling, or input may change, and relevant dense/failure states. Do not refresh or review unrelated screens. See [UI_STYLE.md](UI_STYLE.md#9-review-by-subtraction-then-verify-in-play).
+- **Publishing:** never gate a local code-slice commit on `publish.ps1`. Use pooled local builds and relevant hidden captures/browser checks; build WASM when browser/platform behavior or release acceptance needs it. Publishing is separate and may deploy or contact external services: run it only when authorized by the user. Report deliberately unrun deployment without treating it as a local validation failure.
+- **Documentation only:** review content/links/commands, run `git diff --check` and relevant sync/documentation-tool checks. No game suites, builds, captures, or publication solely for prose; executable tooling changes need their relevant checks.
+- **Failures:** investigate and fix errors, normally in recent/current changes. Distinguish regressions, verified pre-existing failures, and unrun checks with exact commands. Never assume a failure is baseline, hide it, or count it as a pass. If a required check remains blocked outside scope, report it; honor an existing explicit user exception or obtain one before treating the blocked slice as validated. Never commit newly broken code for cadence.
 
-Use project-local asset paths and make missing assets and loading failures clear during publishing.
+Run checks against the actual checkout and real dependencies. Never bypass failures
+with copied projects, alternate manifests, fabricated workspaces, detachment, or
+dependency-path changes. Fix the cause within scope and rerun there.
+
+Demo saves do not have to remain backward compatible. An old/unsupported save
+must produce a clear, recoverable error and let the player start fresh, not crash.
+Implement migration/backward compatibility only when the user explicitly requires
+it. There is no blanket migration or determinism test mandate; select checks for
+the behavior/risk changed. Write no new tests by default, and delete tests that
+assert discarded experimental behaviour (§11); do not delete useful tests merely
+to reduce runtime.
+
+Use project-local asset paths and report missing assets/loading failures clearly.
 
 ### 8.4 WebGL Requirements
 The publisher generates `dist/webgl/index.html` from
@@ -306,47 +238,68 @@ Each module should contain a short `//!` comment explaining its purpose:
 - Never fight the formatter  
 
 ### 10.2 Clippy
-- Run `cargo clippy` regularly  
-- Fix warnings unless intentionally ignored  
-- Document any `#[allow]` with a comment
+- Use strict Clippy (`--all-targets --all-features -- -D warnings`) for Rust slices.
+- Fix warnings/errors; do not weaken flags or add lint suppressions to pass.
+- Existing intentional `#[allow]` attributes need explanatory comments; do not expand them to hide new problems.
 
 ### 10.3 Variable Shadowing
 - Avoid variable shadowing (hiding)
 - Do not declare a new variable with the same name as an existing one in the same scope
 
-## 11. Testing Guidelines
+## 11. Testing Policy
 
-### 11.1 What to Test
-Focus tests on:  
-- Core game calculations  
-- State machine transitions  
-- JSON data loading  
-- UI and rendering generally do not need unit tests.
+These games are prototypes in active development. Rapid iteration, experimentation, and playable functionality come first. Testing supports development; it does not dictate design. The policy stays the same after a game is released (§11.6).
 
-### 11.2 Test Style
-- Tests should read like rules  
-- Avoid complex setups  
-- If a test is hard to write, the code is probably too tangled.
+### 11.1 Default: No New Tests
+- Do not write unit, integration, snapshot, or end-to-end tests by default, including for new features, bug fixes, and refactors.
+- Do not add coverage targets, testing frameworks, test-only dependencies, or public API that exists only so a test can reach it, unless the user explicitly asks.
+- Validate changes by compiling, running, and exercising the affected feature instead (§11.5).
 
-### 11.3 Feature Test Target
-- Strongly target no more than five `#[test]` cases per major feature: one cohesive responsibility, regardless of how its tests are split or named.
-- Prefer high-value behavior and regression tests. Consolidate related inputs with table-driven assertions; do not bundle unrelated checks or delete useful coverage to meet the target.
-- Before committing, review affected feature suites. If more than five cases are needed, briefly explain why distinct coverage warrants them.
+### 11.2 When a Test Earns Its Place
+A test is justified only where it gives clear, lasting value:
+- **Stable, complex algorithms** whose design has settled, such as pathfinding, procedural generation, or simulation math.
+- **Data integrity**, such as JSON content loading with resolvable cross-references, save/load round-trips, and asset registry coverage.
+- **Recurring regressions**: a bug that has come back, not one fixed once.
 
-### 11.4 Test Placement
+State the reason in the commit body. Keep each suite as small as the concern allows, using table-driven assertions for related inputs. Five `#[test]` cases per protected responsibility is a hard ceiling, not a target: there is no test-count or coverage goal, and fewer is better.
+
+The source-size gate (`tests/code_standards.rs`, §2.2) and the asset-registry integrity test are enforcement gates, not behaviour tests. Every crate keeps them.
+
+### 11.3 What Not to Test
+- UI layout, rendering, widget geometry, colours, and copy.
+- Experimental gameplay rules and temporary balancing, including tunable values in `assets/*.json`.
+- Implementation details: private helpers, internal struct shapes, call order, and state or screen wiring that running the game exercises.
+
+### 11.4 Existing Tests
+- Do not preserve behaviour solely because a test asserts it.
+- When you deliberately change experimental behaviour, delete the tests that asserted the old behaviour rather than rewriting them to protect a discarded design. Update a test only when it still covers a §11.2 concern.
+- A failing test means either your change broke a real invariant (fix the code) or the test encodes an obsolete decision (delete it). Never weaken an assertion just to make it pass.
+- While working in an area, remove its tests that §11.3 rules out. Leave unrelated suites for a separate change.
+
+### 11.5 Validation Instead of Tests
+- Run the slice checks in §8.3: formatting, strict Clippy, source-size gates, and the existing tests that cover the changed behaviour.
+- Exercise the change for real: run the game, and for UI changes capture and review the affected screens (§12, `UI_STYLE.md` §9). Publishing stays separate and needs user authorization (§8.3).
+- Do not replace validation with assumptions. Report what was verified and what was not, for example: "captured the market screen and bought two items; did not play through a full season."
+
+### 11.6 Release and Production
+This policy does not relax when a game nears release or is in production. Do not add coverage passes, suites, or tests for a release. A released game may gain a test only for a specific, demonstrated risk such as save corruption, a progression blocker, or data loss, only after agreeing it with the user, and within the §11.2 rules and ceiling.
+
+### 11.7 Test Placement
 - Each crate owns a `tests/` directory beside its `Cargo.toml`, including member crates in multi-crate repositories. Keep all tests and test-only helpers there.
 - Do not add `#[cfg(test)]`, `mod tests`, test helpers, or test source files under `src/`.
-- Tests exercise the crate's public API. For a binary-only game, expose testable logic through `src/lib.rs` and have `main.rs` use that library; keep internals private unless an intentional public seam is needed.
-- Existing `src/**/tests.rs` files are legacy migration work. Migrate them as a separate change before expanding coverage.
-- Split large suites by responsibility while preserving the feature target (§11.3) and file-size rule (§2.2).
+- Tests exercise the crate's public API. For a binary-only game, expose logic through `src/lib.rs` and have `main.rs` use that library; keep internals private unless an intentional public seam is needed.
+- Existing `src/**/tests.rs` files and inline `mod tests` are legacy. Delete the cases this policy rules out when you work in that area; migrate any that remain to `tests/` as a separate change.
+- Split a large retained suite by responsibility while respecting the file-size rule (§2.2).
 
 ## 12. Verification Artifacts
 
-- For UI changes, follow the visual and interaction review in `UI_STYLE.md` §9; inspect normal and minimum supported sizes and relevant dense states. Compilation and geometry checks alone do not verify usability.
+- For UI changes, follow `UI_STYLE.md` §9 for affected screens/states and interactions only; check relevant sizes and dense states. Do not recapture unrelated screens. Compilation and geometry checks alone do not verify usability.
 - Store verification screenshots directly in `docs/verification/`.
 - Do not create screenshot subfolders under `docs/verification/`.
 - If a new capture represents the same screen or state as an existing screenshot, replace the existing image instead of keeping duplicates.
 - Do not create disposable review files, scratch projects, backup screenshots, or cleanup folders, either inside the workspace or elsewhere. Do not move files out of a repository to make Git status clean. Preserve existing work and report blockers instead.
+- Use the shared capture wrapper, retain its hidden-window default, wait for completion, and verify the launched game exits. Fix/report tool failures; do not invent another capture pipeline.
+- Investigate ownership/contents of unexpected directories; remove only verified disposable artifacts created by this task within scope, otherwise report a blocker.
 - Use existing tooling and direct command output. Established tools may manage their own internal capture manifests, logs, and normal build outputs; do not create an ad hoc parallel set of temporary artifacts.
 - Never fabricate a `Cargo.toml`, source file, or placeholder crate to bypass a workspace failure. A missing manifest in an unexpected directory is a workspace hygiene problem to investigate and report, not a request to invent a project.
 

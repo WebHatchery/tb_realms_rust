@@ -168,10 +168,12 @@ help, unused panels, decorative borders, and irrelevant statistics. Recompose
 the remaining content and adjust the camera. Add elements only when a player
 decision or observed usability gap calls for them.
 
-Before accepting a new or changed UI, inspect screenshots and exercise the
-affected interactions. Cover normal play at the normal and minimum supported
-sizes, plus relevant first-use, dense/late-game, selected/expanded, and urgent
-or failure states. Capture only states the game actually supports.
+Before accepting a UI slice, inspect only affected screens/states and exercise
+the changed interactions. Check normal/minimum sizes when layout, scaling, or
+input may change, plus first-use, dense, expanded, or failure states relevant to
+the change. Do not recapture every screen or refresh unrelated evidence. Reuse
+current captures/builds when their relevant inputs are unchanged; capture only
+states the game supports. This checklist applies to the affected scope.
 
 - [ ] The current decision, focal element, and primary action are clear at a glance.
 - [ ] The world or current decision occupies the main area at a useful scale.
@@ -189,4 +191,5 @@ captures, per `CODE_STANDARDS.md` §12. Use the game's capture harness where
 available and verify browser/touch behavior interactively. Report the scenes,
 sizes, interactions checked, and any limitations. A successful compile or a
 screenshot with no overlap does not establish a usable visual hierarchy.
-Follow the affected game's normal publish validation under §8.3 as well.
+Use proportionate local validation under `CODE_STANDARDS.md` §8.3; publishing
+is separate, requires user authorization, and never gates a local slice commit.
